@@ -184,6 +184,35 @@ G4String EDepSim::RooTrackerKinematicsGenerator::GetInputName() {
     return G4String(fInput->GetName());
 }
 
+std::map<std::tuple<double, double, double, double>, std::vector<int>> EDepSim::RooTrackerKinematicsGenerator::GroupParticlesByPosition() {
+    // create a container for to group the particles in
+    std::map<std::tuple<double, double, double, double>, std::vector<int>> positionToParticles;
+
+    //round the coordinates to a certain precision to avoid floating point issues
+    auto roundTo = [](double value, double precision){ 
+        return std::round(value / precision) * precision; 
+    };
+    const double precision = 1e-6;
+
+    // group the particles by their (x,y,z,t) position
+    for (int cnt = 0; cnt < fStdHepN; ++cnt)
+    {
+        // keep only the initial and final state particles
+        if(!fStdHepStatus[cnt] != 0 && fStdHepStatus[cnt] != 1)
+            continue;
+        // extract the coordinates
+        double x = roundTo(fStdHepX4[cnt][0], precision);
+        double y = roundTo(fStdHepX4[cnt][1], precision);
+        double z = roundTo(fStdHepX4[cnt][2], precision);
+        double t = roundTo(fStdHepX4[cnt][3], precision);
+        // create a key from the coordinate combination
+        auto key = std::make_tuple(x, y, z, t);
+        // add the particle index under its corresponding vertex position
+        positionToParticles[key].push_back(cnt);
+    }
+    return positionToParticles;
+}
+
 EDepSim::VKinematicsGenerator::GeneratorStatus
 EDepSim::RooTrackerKinematicsGenerator::GeneratePrimaryVertex(
     G4Event* anEvent,
