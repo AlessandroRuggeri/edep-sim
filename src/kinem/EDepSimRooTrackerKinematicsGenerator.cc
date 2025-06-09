@@ -212,6 +212,7 @@ std::map<std::tuple<double, double, double, double>, std::vector<int>> EDepSim::
     }
     return positionToParticles;
 }
+
 EDepSim::VKinematicsGenerator::GeneratorStatus
 EDepSim::RooTrackerKinematicsGenerator::GeneratePrimaryVertex(
     G4Event* anEvent,
@@ -347,8 +348,21 @@ EDepSim::RooTrackerKinematicsGenerator::GeneratePrimaryVertex(
     auto groupedPositions = EDepSim::RooTrackerKinematicsGenerator::GroupParticlesByPosition();
     // loop over the final state particles in each vertex group
     for (const auto& particleGroup : groupedPositions){
+
+        // get the vertex group indices
         const auto &vtxIndices = particleGroup.second;
         const int firstPartIdx = vtxIndices.front();
+
+        // manual deep copy of vertexInfo for the loop
+        auto* thisVertexInfo = new EDepSim::VertexInfo;
+        thisVertexInfo->SetReaction(vertexInfo->GetReaction());
+        thisVertexInfo->SetFilename(vertexInfo->GetFilename());
+        thisVertexInfo->SetInteractionNumber(vertexInfo->GetInteractionNumber());
+        thisVertexInfo->SetCrossSection(vertexInfo->GetCrossSection());
+        thisVertexInfo->SetDiffCrossSection(vertexInfo->GetDiffCrossSection());
+        thisVertexInfo->SetWeight(vertexInfo->GetWeight());
+        thisVertexInfo->SetProbability(vertexInfo->GetProbability());
+
         // fill in the vtx. position from the first element in the group
         // fStdHepX4 is assumed to be in [fermi, fermi, fermi, zs], so we convert
         G4PrimaryVertex *theVertex = new G4PrimaryVertex(G4ThreeVector(fEvtVtx[0] * m + fStdHepX4[firstPartIdx][0] * fermi,
@@ -362,7 +376,7 @@ EDepSim::RooTrackerKinematicsGenerator::GeneratePrimaryVertex(
                         << " Time: " << G4BestUnit(theVertex->GetT0(), "Time"));
 
         // Add the information field to the vertex.
-        theVertex->SetUserInformation(vertexInfo);
+        theVertex->SetUserInformation(thisVertexInfo);
 
         // Fill the particles to be tracked (status ==1) in the vertex group.  These particles are
         // attached to the primary vertex.  Also save the incident neutrino
