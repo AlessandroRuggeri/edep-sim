@@ -18,6 +18,8 @@
 #include <G4UnitsTable.hh>
 #include <Randomize.hh>
 
+#include "G4TransportationManager.hh"
+
 #include <TFile.h>
 #include <TBits.h>
 #include <TObjString.h>
@@ -206,7 +208,7 @@ std::map<std::tuple<double, double, double, double>, std::vector<int>> EDepSim::
         double z = roundTo(fStdHepX4[cnt][2], precision);
         double t = roundTo(fStdHepX4[cnt][3], precision);
         // create a key from the coordinate combination
-        auto key = std::make_tuple(x, y, z, t);
+        auto key = std::make_tuple(t, x, y, z);
         // add the particle index under its corresponding vertex position
         positionToParticles[key].push_back(cnt);
     }
@@ -344,11 +346,16 @@ EDepSim::RooTrackerKinematicsGenerator::GeneratePrimaryVertex(
         theIncomingVertex->SetPrimary(theParticle);
     }
 
+    // auto in_vtx_pos = theIncomingVertex->GetPosition();
+    // auto* in_nav = G4TransportationManager::GetTransportationManager()->GetNavigatorForTracking();
+    // auto* in_vtx_volume = in_nav->LocateGlobalPointAndSetup(in_vtx_pos);
+    // std::cout << "[Incoming Vertex] Position: " << in_vtx_pos/fermi << " in volume: " << (in_vtx_volume ? in_vtx_volume->GetName() : "null")<<"\n";
+
     // 6/06/2025 - adding multiple vertices by looping over the map
     auto groupedPositions = EDepSim::RooTrackerKinematicsGenerator::GroupParticlesByPosition();
     // loop over the final state particles in each vertex group
     for (const auto& particleGroup : groupedPositions){
-
+        std::cout << "Vtx at (" << std::get<1>(particleGroup.first)<< ", "<<std::get<2>(particleGroup.first)<< ", " << std::get<2>(particleGroup.first) << ", " << std::get<0>(particleGroup.first) << ")\n";
         // get the vertex group indices
         const auto &vtxIndices = particleGroup.second;
         const int firstPartIdx = vtxIndices.front();
@@ -377,6 +384,12 @@ EDepSim::RooTrackerKinematicsGenerator::GeneratePrimaryVertex(
 
         // Add the information field to the vertex.
         theVertex->SetUserInformation(thisVertexInfo);
+
+        // auto vtx_pos = theVertex->GetPosition();
+        // auto* nav = G4TransportationManager::GetTransportationManager()->GetNavigatorForTracking();
+        // auto* vtx_volume = nav->LocateGlobalPointAndSetup(vtx_pos);
+        // std::cout << "[Vertex] relative Position: " << (vtx_pos-in_vtx_pos)/fermi << " in volume: " << (vtx_volume ? vtx_volume->GetName() : "null")<<"\n";
+
 
         // Fill the particles to be tracked (status ==1) in the vertex group.  These particles are
         // attached to the primary vertex.  Also save the incident neutrino
@@ -447,6 +460,7 @@ EDepSim::RooTrackerKinematicsGenerator::GeneratePrimaryVertex(
                 << " " << momentum.e()/MeV << " MeV"
                 << " " << momentum.m()/MeV << " MeV/c^2");
             theVertex->SetPrimary(theParticle);
+            std::cout << "idx: " << cnt << ", pdg: " << theParticle->GetPDGcode() << ", tuple: (" << std::get<0>(particleGroup.first)<<", "<<std::get<1>(particleGroup.first)<<", "<<std::get<2>(particleGroup.first)<<", "<<std::get<3>(particleGroup.first)<< ")\n";
         }
     }
 
