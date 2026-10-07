@@ -1,4 +1,3 @@
-#include "EDepSimRootGeometryManager.hh"
 #include "EDepSimTrajectoryPoint.hh"
 
 #include <G4Track.hh>
@@ -11,8 +10,6 @@
 #include <G4AttDef.hh>
 #include <G4AttValue.hh>
 #include <G4UnitsTable.hh>
-
-#include <TGeoManager.h>
 
 #include <EDepSimLog.hh>
 
@@ -31,11 +28,11 @@ EDepSim::TrajectoryPoint::TrajectoryPoint(const G4Step* aStep)
     fMomentum = aStep->GetPostStepPoint()->GetMomentum();
     fStepStatus = aStep->GetPostStepPoint()->GetStepStatus();
     if (aStep->GetPostStepPoint()->GetPhysicalVolume()) {
-        fPhysVolName 
+        fPhysVolName
             = aStep->GetPostStepPoint()->GetPhysicalVolume()->GetName();
     }
     else {
-        fPhysVolName == "OutOfWorld";
+        fPhysVolName = "OutOfWorld";
     }
     fPrevPosition = aStep->GetPreStepPoint()->GetPosition();
     // Check if the G4VProcess for the defining process is available.  It
@@ -61,7 +58,7 @@ EDepSim::TrajectoryPoint::TrajectoryPoint(const G4Track* aTrack)
         fPhysVolName = aTrack->GetVolume()->GetName();
     }
     else {
-        fPhysVolName == "OutOfWorld";
+        fPhysVolName = "OutOfWorld";
     }
     fPrevPosition = aTrack->GetPosition();
     const G4VProcess* proc = aTrack->GetCreatorProcess();
@@ -121,6 +118,41 @@ const std::map<G4String,G4AttDef>* EDepSim::TrajectoryPoint::GetAttDefs() const 
     return store;
 }
 
+G4String EDepSim::TrajectoryPoint::GetStepStatusName() const
+{
+  G4String status;
+  switch (fStepStatus) {
+    case fWorldBoundary:
+      status = "fWorldBoundary";
+      break;
+    case fGeomBoundary:
+      status = "fGeomBoundary";
+      break;
+    case fAtRestDoItProc:
+      status = "fAtRestDoItProc";
+      break;
+    case fAlongStepDoItProc:
+      status = "fAlongStepDoItProc";
+      break;
+    case fPostStepDoItProc:
+      status = "fPostStepDoItProc";
+      break;
+    case fUserDefinedLimit:
+      status = "fUserDefinedLimit";
+      break;
+    case fExclusivelyForcedProc:
+      status = "fExclusivelyForcedProc";
+      break;
+    case fUndefined:
+      status = "fUndefined";
+      break;
+    default:
+      status = "Unknown";
+      break;
+  }
+  return status;
+}
+
 std::vector<G4AttValue>* EDepSim::TrajectoryPoint::CreateAttValues() const {
     std::vector<G4AttValue>* values = new std::vector<G4AttValue>;
 
@@ -128,7 +160,7 @@ std::vector<G4AttValue>* EDepSim::TrajectoryPoint::CreateAttValues() const {
 
     values->push_back(G4AttValue("Momentum",
                                  G4BestUnit(fMomentum,"Momentum"),""));
-    values->push_back(G4AttValue("StepStatus",fStepStatus,""));
+    values->push_back(G4AttValue("StepStatus",GetStepStatusName(),""));
 
     values->push_back(G4AttValue("PhysVolName",fPhysVolName,""));
 
@@ -137,13 +169,4 @@ std::vector<G4AttValue>* EDepSim::TrajectoryPoint::CreateAttValues() const {
 #endif
 
     return values;
-}
-
-int EDepSim::TrajectoryPoint::GetVolumeNode() const {
-    gGeoManager->PushPath();
-    int node
-        = EDepSim::RootGeometryManager::Get()->GetNodeId(0.5*(GetPosition()
-                                                          +fPrevPosition));
-    gGeoManager->PopPath();
-    return node;
 }

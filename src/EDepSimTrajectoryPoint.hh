@@ -12,12 +12,12 @@ class G4Track;
 class G4Step;
 class G4VProcess;
 
+namespace EDepSim {class TrajectoryPoint;}
 /// Store a point along a particle trajectory.  This is used internally for
 /// some bookkeeping, and then is translated into an output class when the
 /// event is saved.  It keeps track of information like the momentum at the
 /// point, the process that occured the the point, the volume containing the
 /// point, and the energy deposited at the point.
-namespace EDepSim {class TrajectoryPoint;}
 class EDepSim::TrajectoryPoint : public G4TrajectoryPoint {
 public:
     TrajectoryPoint();
@@ -65,22 +65,20 @@ public:
     /// referenced by GetVolumeNode().
     G4String GetPhysVolName() const { return fPhysVolName; }
 
-    /// Get the node for the volume containing the stopping point.  If the
-    /// stopping point is on a geometric boundary, this is the volume that the
-    /// track is just exiting. 
-    int GetVolumeNode() const;
+    /// Translate the step status into a printable name.
+    G4String GetStepStatusName() const;
 
     // Get method for HEPRep style attributes
 
     virtual const std::map<G4String,G4AttDef>* GetAttDefs() const;
     virtual std::vector<G4AttValue>* CreateAttValues() const;
-    
+
 //---------
   private:
 //---------
 
 // Member data
-    
+
     G4double fTime;
     G4ThreeVector fMomentum;
     G4StepStatus fStepStatus;
@@ -108,4 +106,3 @@ inline void EDepSim::TrajectoryPoint::operator delete(void *aTrajectoryPoint) {
         (EDepSim::TrajectoryPoint *) aTrajectoryPoint);
 }
 #endif
-

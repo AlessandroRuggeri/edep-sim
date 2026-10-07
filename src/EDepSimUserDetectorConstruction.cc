@@ -1,3 +1,5 @@
+#include <algorithm>
+
 #include "EDepSimUserDetectorConstruction.hh"
 #include "EDepSimDetectorMessenger.hh"
 #include "EDepSimRootGeometryManager.hh"
@@ -7,13 +9,17 @@
 #include "EDepSimArbEMField.hh"
 #include "EDepSimArbElecField.hh"
 #include "EDepSimArbMagField.hh"
+#include "EDepSimDokeBirksSaturation.hh"
 
 #define BUILD_CAPTAIN
 #ifdef BUILD_CAPTAIN
 #include "captain/CaptWorldBuilder.hh"
+#include "captain/CaptMaterialDefinitions.hh"
 #endif
 
 #include "EDepSimLog.hh"
+
+#include <G4Version.hh>
 
 #include <G4ios.hh>
 #include <G4NistManager.hh>
@@ -33,7 +39,8 @@
 #include <G4SolidStore.hh>
 #include <G4LogicalVolumeStore.hh>
 #include <G4PhysicalVolumeStore.hh>
-
+#include <G4MaterialPropertiesTable.hh>
+#include <G4EmParameters.hh>
 #include <G4FieldManager.hh>
 
 #include <G4UnitsTable.hh>
@@ -51,7 +58,6 @@ EDepSim::UserDetectorConstruction::UserDetectorConstruction() {
 #ifdef BUILD_CAPTAIN
     fWorldBuilder = new CaptWorldBuilder("/Captain",this);
 #endif
-    fDefaultMaterial = NULL;
     fValidateGeometry = false;
     fGDMLParser = NULL;
     fPhysicalWorld = NULL;
@@ -109,11 +115,56 @@ namespace {
 
 namespace {
     double ParseUnit(std::string value, std::string unit) {
+        // Accept both "0.5 cm" and the "0.5*cm" form written by LArSoft
+        // geometry generators (eg dunecore GDML StepLimit auxiliaries).
+        std::replace(value.begin(), value.end(), '*', ' ');
         double val = 0.0;
         std::istringstream theStream(value);
         theStream >> val >> unit;
         val *= G4UnitDefinition::GetValueOf(unit);
         return val;
+    }
+
+    // Parse a scalar value that may carry its unit inline (as part of the
+    // value string, separated by whitespace and/or '*') or via a separate
+    // fallback unit string (eg the GDML "auxunit" attribute).  This supports
+    // the LArSoft-style scalar "Efield" auxiliary (see edep-sim issue #99),
+    // eg <auxiliary auxtype="Efield" auxunit="V/cm" auxvalue="500*V/cm"/>.
+    //
+    // If the value carries a unit, the fallback unit is ignored.  If neither
+    // the value nor the fallback supplies a unit, an exception is thrown.
+    double ParseUnitScalar(std::string value, std::string fallbackUnit) {
+        // LArSoft-style geometry writes units joined with '*' (eg "500*V/cm").
+        std::replace(value.begin(), value.end(), '*', ' ');
+        std::istringstream theStream(value);
+        double val = 0.0;
+        std::string unit;
+        theStream >> val >> unit;
+        if (unit.empty()) {
+            // No unit in the value: fall back to the auxunit attribute.
+            unit = fallbackUnit;
+        }
+        if (unit.empty()) {
+            EDepSimError("Electric field value \"" << value
+                         << "\" has no units (neither in the value nor as"
+                         << " an auxunit)");
+            throw std::runtime_error("Electric field value has no units");
+        }
+        val *= G4UnitDefinition::GetValueOf(unit);
+        return val;
+    }
+
+    // Parse a string containing a direction, eg "(1.0 0.0 0.0)" or
+    // "(1.0, 0.0, 0.0)".  Components may be separated by whitespace and/or
+    // commas.  The returned vector is not normalized here.
+    G4ThreeVector ParseDirection(std::string value) {
+        std::replace(value.begin(), value.end(), '(', ' ');
+        std::replace(value.begin(), value.end(), ')', ' ');
+        std::replace(value.begin(), value.end(), ',', ' ');
+        std::istringstream theStream(value);
+        double x = 0.0, y = 0.0, z = 0.0;
+        theStream >> x >> y >> z;
+        return G4ThreeVector(x, y, z);
     }
 
     // Parse a string containing the electric field vector.
@@ -224,6 +275,11 @@ G4VPhysicalVolume* EDepSim::UserDetectorConstruction::Construct() {
         EDepSimThrow("Physical world not built");
     }
 
+    // Setup the basic em parameter after the materials are defined.
+    // This is going to override the initial defaults.
+    G4EmParameters* emParams = G4EmParameters::Instance();
+    emParams->SetEmSaturation(new EDepSim::DokeBirksSaturation(0));
+
     EDepSim::RootGeometryManager::Get()->Update(fPhysicalWorld,
                                                 fValidateGeometry);
 
@@ -232,6 +288,11 @@ G4VPhysicalVolume* EDepSim::UserDetectorConstruction::Construct() {
     G4VPersistencyManager *pMan
         = G4VPersistencyManager::GetPersistencyManager();
     if (pMan) pMan->Store(fPhysicalWorld);
+
+    /// Notify any external users that the geometry has changed.
+    for (UserUpdateGeometryAction* action : fExternalActions) {
+        action->UpdateGeometry(fPhysicalWorld);
+    }
 
     return fPhysicalWorld;
 }
@@ -251,7 +312,19 @@ void EDepSim::UserDetectorConstruction::ConstructSDandField() {
         for (G4GDMLAuxListType::const_iterator auxItem = aux->second.begin();
              auxItem != aux->second.end();
              ++auxItem) {
-            if (auxItem->type != "SensDet") continue;
+            G4String type = "NotAnSD";
+            if (auxItem->type == "SensDet") {
+                EDepSimWarn("SensDet is deprecated."
+                            " Use SegmentDetector instead.");
+                type = "segment";
+            }
+            else if (auxItem->type == "SegmentDetector") {
+                type = "segment";
+            }
+            else if (auxItem->type == "SurfaceDetector") {
+                type = "surface";
+            }
+            if (type == "NotAnSD") continue;
             std::string logName(aux->first->GetName());
             bool exclude = false;
             for (std::vector<std::string>::iterator e
@@ -264,12 +337,14 @@ void EDepSim::UserDetectorConstruction::ConstructSDandField() {
             }
             if (exclude) {
                 EDepSimLog("Volume " << logName << "marked as sensitive, but"
-                           << " excluded");
+                           << " is excluded");
+                continue;
             }
-            EDepSimLog("Collect energy deposition for " << aux->first->GetName()
-                       << " in " << auxItem->value);
-            EDepSim::SDFactory factory("segment");
-            aux->first->SetSensitiveDetector(factory.MakeSD(auxItem->value));
+            EDepSimLog("Sensitive detector for " << aux->first->GetName()
+                       << " is " << type << "/" << auxItem->value);
+            EDepSim::SDFactory factory;
+            aux->first->SetSensitiveDetector(
+                factory.MakeSD(auxItem->value,type));
         }
     }
 
@@ -302,26 +377,46 @@ void EDepSim::UserDetectorConstruction::ConstructSDandField() {
         bool HasEField = false;
         std::string eField_fname;
         G4ThreeVector eField(0,0,0);
+
+        // The electric field can be specified in three (mutually exclusive)
+        // ways: the edep-sim vector "EField", the LArSoft-style scalar
+        // "Efield" (note the lower-case 'f') plus an optional direction
+        // "EfieldDir", or the arbitrary field file "ArbEField".  See
+        // edep-sim issue #99.  The vector "EField" and scalar "Efield" are
+        // collected here and reconciled after the loop with a first-one-wins
+        // tie-break.
+        bool hasVectorEField = false;   // edep-sim style vector "EField"
+        bool hasScalarEField = false;   // LArSoft style scalar "Efield"
+        std::string eFieldSource;       // "EField" or "Efield": first one wins
+        G4ThreeVector vectorEField(0,0,0);
+        double scalarEField = 0.0;
+        // Direction for the scalar "Efield".  LArSoft assumes a uniform field
+        // along +x, which is the default when no "EfieldDir" is given.
+        bool hasEFieldDir = false;      // A EfieldDir auxtype was found
+        G4ThreeVector eFieldDir(1.0, 0.0, 0.0);
+
         for (G4GDMLAuxListType::const_iterator auxItem = auxItems.begin();
              auxItem != auxItems.end();
              ++auxItem) {
-            if (auxItem->type != "EField" && auxItem->type != "ArbEField") {
-                continue;
-            }
 
             if (auxItem->type == "EField") {
-                eField = ParseEField(auxItem->value);
-                HasEField = true;
-
-                EDepSimInfo("Set the electric field for "
-                        << logVolume->GetName()
-                        << " to "
-                        << " X=" << eField.x()/(volt/cm) << " V/cm"
-                        << ", Y=" << eField.y()/(volt/cm) << " V/cm"
-                        << ", Z=" << eField.z()/(volt/cm) << " V/cm");
+                vectorEField = ParseEField(auxItem->value);
+                hasVectorEField = true;
+                if (eFieldSource.empty()) eFieldSource = "EField";
             }
 
-            if (auxItem->type == "ArbEField") {
+            else if (auxItem->type == "Efield") {
+                scalarEField = ParseUnitScalar(auxItem->value, auxItem->unit);
+                hasScalarEField = true;
+                if (eFieldSource.empty()) eFieldSource = "Efield";
+            }
+
+            else if (auxItem->type == "EfieldDir") {
+                eFieldDir = ParseDirection(auxItem->value);
+                hasEFieldDir = true;
+            }
+
+            else if (auxItem->type == "ArbEField") {
                 eField_fname = auxItem->value;
                 HasEField = true;
 
@@ -329,6 +424,52 @@ void EDepSim::UserDetectorConstruction::ConstructSDandField() {
                         << logVolume->GetName()
                         << " to " << eField_fname);
             }
+        }
+
+        // Reconcile the vector "EField" and scalar "Efield" specifications.
+        if (hasVectorEField && hasScalarEField) {
+            EDepSimLog("Both EField and Efield auxiliaries found for "
+                        << logVolume->GetName()
+                        << "; using the first one (" << eFieldSource
+                        << ") and ignoring the other.");
+        }
+
+        // Check for incompatible aux types
+        if (hasVectorEField and hasEFieldDir) {
+            EDepSimLog("EfieldDir ignored by vector EField in "
+                       << logVolume->GetName());
+        }
+
+        if (eFieldSource == "EField") {
+            eField = vectorEField;
+            HasEField = true;
+        }
+        else if (eFieldSource == "Efield") {
+            static int throttle = 5;
+            if (throttle-- > 0) {
+                EDepSimLog("DEPRECATED Scalar Efield specification for "
+                           << logVolume->GetName() << ": "
+                           << "Update using EField or ArbEField");
+            }
+
+            G4ThreeVector dir = eFieldDir;
+            if (dir.mag() > 0.0) {
+                dir = dir.unit();
+            }
+            else {
+                dir = G4ThreeVector(1.0, 0.0, 0.0);
+            }
+            eField = scalarEField * dir;
+            HasEField = true;
+        }
+
+        if (HasEField && eField_fname.empty()) {
+            EDepSimInfo("Set the electric field for "
+                    << logVolume->GetName()
+                    << " to "
+                    << " X=" << eField.x()/(volt/cm) << " V/cm"
+                    << ", Y=" << eField.y()/(volt/cm) << " V/cm"
+                    << ", Z=" << eField.z()/(volt/cm) << " V/cm");
         }
 
         // Find the magnetic field for the volume.
@@ -449,212 +590,15 @@ void EDepSim::UserDetectorConstruction::ConstructSDandField() {
 }
 
 void EDepSim::UserDetectorConstruction::DefineMaterials() {
-    EDepSim::RootGeometryManager* geoMan = EDepSim::RootGeometryManager::Get();
-    G4double density;
-    G4String name, symbol;
-    G4double temperature, pressure;
-    G4int nel, natoms;
-    G4double fractionmass;
 
-    G4NistManager* nistMan = G4NistManager::Instance();
+#ifdef BUILD_CAPTAIN
+    CaptMaterialDefinitions captainMaterials;
+    captainMaterials.DefineMaterials();
+#endif
 
-    G4Element* elH = nistMan->FindOrBuildElement(1);
-
-    G4Element* elB = nistMan->FindOrBuildElement(5);
-
-    G4Element* elC = nistMan->FindOrBuildElement(6);
-
-    G4Element* elN = nistMan->FindOrBuildElement(7);
-
-    G4Element* elO = nistMan->FindOrBuildElement(8);
-
-    // G4Element* elF = nistMan->FindOrBuildElement(9);
-
-    G4Element* elNa = nistMan->FindOrBuildElement(11);
-
-    // G4Element* elAl = nistMan->FindOrBuildElement(13);
-
-    G4Element* elSi = nistMan->FindOrBuildElement(14);
-
-    // G4Element* elCl = nistMan->FindOrBuildElement(17);
-
-    G4Element* elAr = nistMan->FindOrBuildElement(18);
-
-    // G4Element* elTi = nistMan->FindOrBuildElement(22);
-
-    G4Element* elFe = nistMan->FindOrBuildElement(26);
-
-    G4Element* elCo = nistMan->FindOrBuildElement(27);
-
-    G4Element* elCu = nistMan->FindOrBuildElement(29);
-
-    // G4Element* elZn = nistMan->FindOrBuildElement(30);
-
-    // G4Element* elSn = nistMan->FindOrBuildElement(50);
-
-    // G4Element* elPb = nistMan->FindOrBuildElement(82);
-
-    //Air
-    G4Material* air
-        = new G4Material(name="Air",
-                         density = 1.29*CLHEP::mg/CLHEP::cm3,
-                         nel=2,
-                         kStateGas,
-                         temperature = 293.15*CLHEP::kelvin,
-                         pressure=1*CLHEP::atmosphere);
-    air->AddElement(elN, fractionmass = 70*CLHEP::perCent);
-    air->AddElement(elO, fractionmass = 30*CLHEP::perCent);
-    geoMan->SetDrawAtt(air,kGray+3,0.01);
-
-    // This is the default material.
-    fDefaultMaterial = air;
-
-    //Earth
-    density = 2.15*CLHEP::g/CLHEP::cm3;
-    G4Material* earth
-        = new G4Material(name="Earth",
-                         density = 2.15*CLHEP::g/CLHEP::cm3,
-                         nel=2,
-                         kStateSolid,
-                         temperature = 293.15*CLHEP::kelvin,
-                         pressure=1*CLHEP::atmosphere);
-    earth->AddElement(elSi, natoms=1);
-    earth->AddElement(elO, natoms=2);
-    geoMan->SetDrawAtt(earth,49,0.2);
-
-    //Cement
-    G4Material* cement
-        = new G4Material(name="Cement",
-                         density = 2.5*CLHEP::g/CLHEP::cm3,
-                         nel=2,
-                         kStateSolid,
-                         temperature = 293.15*CLHEP::kelvin,
-                         pressure=1*CLHEP::atmosphere);
-    cement->AddElement(elSi, natoms=1);
-    cement->AddElement(elO, natoms=2);
-    geoMan->SetDrawAtt(cement,kGray,0.2);
-
-    // The usual stainless steel (SS_304).
-    density = 8.0*CLHEP::g/CLHEP::cm3;
-    G4Material* SS_304 = new G4Material(name="SS_304",
-                                       density = 8.0*CLHEP::g/CLHEP::cm3,
-                                       nel=3,
-                                       kStateSolid,
-                                       temperature = 293.15*CLHEP::kelvin,
-                                       pressure=1*CLHEP::atmosphere);
-    SS_304->AddElement(elC,  fractionmass =  4*CLHEP::perCent);
-    SS_304->AddElement(elFe, fractionmass = 88*CLHEP::perCent);
-    SS_304->AddElement(elCo, fractionmass =  8*CLHEP::perCent);
-    geoMan->SetDrawAtt(SS_304,kBlue-10,0.05);
-
-    // Argon Gas
-    G4Material* argon =  new G4Material(name="Argon_Gas",
-                                        density = 1.66*CLHEP::mg/CLHEP::cm3,
-                                        nel=1,
-                                        kStateGas,
-                                        temperature = 87.3*CLHEP::kelvin,
-                                        pressure=1*CLHEP::atmosphere);
-    argon->AddElement(elAr, natoms=1);
-    geoMan->SetDrawAtt(argon,kMagenta-10,0.1);
-
-    // Liquid Argon
-    G4Material* LAr =  new G4Material(name="Argon_Liquid",
-                                      density = 1.3954*CLHEP::g/CLHEP::cm3,
-                                      nel=1,
-                                      kStateLiquid,
-                                      temperature = 87.3*CLHEP::kelvin,
-                                      pressure=1*CLHEP::atmosphere);
-    LAr->AddElement(elAr, natoms=1);
-
-    // Set up liquid argon for NEST.
-    G4MaterialPropertiesTable *LArMatProps = new G4MaterialPropertiesTable();
-    LArMatProps->AddConstProperty("ELECTRICFIELD",500*CLHEP::volt/CLHEP::cm);
-    LArMatProps->AddConstProperty("TOTALNUM_INT_SITES",-1);
-    LAr->SetMaterialPropertiesTable(LArMatProps);
-
-    geoMan->SetDrawAtt(LAr,kCyan-9,0.1);
-
-    // The CAPTAIN TPC wire.
-    G4Material *wire = new G4Material(name="Captain_Wire",
-                                      density = 8.96*CLHEP::g/CLHEP::cm3,
-                                      nel=1,
-                                      kStateSolid,
-                                      temperature = 87.3*CLHEP::kelvin,
-                                      pressure=1*CLHEP::atmosphere);
-    wire->AddElement(elCu, natoms=1);
-    geoMan->SetDrawAtt(wire,kOrange+1,1.0);
-
-    // Glass -
-    G4Material* glass
-        = new G4Material(name="Glass",
-                         density = 2.70*CLHEP::g/CLHEP::cm3,
-                         nel=4);
-    glass->AddElement(elO,53.9*CLHEP::perCent);
-    glass->AddElement(elSi,38.4*CLHEP::perCent);
-    glass->AddElement(elB,3.8*CLHEP::perCent);
-    glass->AddElement(elNa,3.8*CLHEP::perCent);
-    geoMan->SetDrawAtt(glass,kBlue+1,0.3);
-
-    // G10 - by volume 57% glass, 43% epoxy (CH2)
-    G4Material* g10
-        = new G4Material(name="G10",
-                         density = 1.70*CLHEP::g/CLHEP::cm3,
-                         nel=6);
-    g10->AddElement(elH,6.2*CLHEP::perCent);
-    g10->AddElement(elC,36.8*CLHEP::perCent);
-    g10->AddElement(elO,30.7*CLHEP::perCent);
-    g10->AddElement(elSi,21.9*CLHEP::perCent);
-    g10->AddElement(elB,2.2*CLHEP::perCent);
-    g10->AddElement(elNa,2.2*CLHEP::perCent);
-    geoMan->SetDrawAtt(g10,kGreen+1,0.75);
-
-    // FR4 - Approximated by the composition of G10.  The density is from
-    // Wikipedia.
-    G4Material* fr4
-        = new G4Material(name="FR4",
-                         density = 1850*CLHEP::kg/CLHEP::m3,
-                         nel=6);
-    fr4->AddElement(elH,6.2*CLHEP::perCent);
-    fr4->AddElement(elC,36.8*CLHEP::perCent);
-    fr4->AddElement(elO,30.7*CLHEP::perCent);
-    fr4->AddElement(elSi,21.9*CLHEP::perCent);
-    fr4->AddElement(elB,2.2*CLHEP::perCent);
-    fr4->AddElement(elNa,2.2*CLHEP::perCent);
-    geoMan->SetDrawAtt(fr4,kGreen+1,1.0);
-
-    // FR4_Copper - Approximated by the composition of G10 plus copper.  The
-    // copper is from the cladding, but is approximated as spread through the
-    // FR4.  The density is from Wikipedia.
-    G4Material* fr4Copper
-        = new G4Material(name="FR4_Copper",
-                         density = 1850*CLHEP::kg/CLHEP::m3,
-                         nel=7);
-    double cuFrac = 3*CLHEP::perCent;
-    double fr4Frac = 1.0 - cuFrac;
-    fr4Copper->AddElement(elH,6.2*CLHEP::perCent*fr4Frac);
-    fr4Copper->AddElement(elC,36.8*CLHEP::perCent*fr4Frac);
-    fr4Copper->AddElement(elO,30.7*CLHEP::perCent*fr4Frac);
-    fr4Copper->AddElement(elSi,21.9*CLHEP::perCent*fr4Frac);
-    fr4Copper->AddElement(elB,2.2*CLHEP::perCent*fr4Frac);
-    fr4Copper->AddElement(elNa,2.2*CLHEP::perCent*fr4Frac);
-    fr4Copper->AddElement(elCu,cuFrac);
-    geoMan->SetDrawAtt(fr4Copper,kYellow-6,1.0);
-
-    // Acrylic - Approximated by the composition of the Acrylic used to hold
-    // the TPB..  The density is from Wikipedia.
-    G4Material* acrylic
-        = new G4Material(name="Acrylic",
-                         density = 1189*CLHEP::kg/CLHEP::m3,
-                         nel=3);
-    acrylic->AddElement(elH,53.4*CLHEP::perCent);
-    acrylic->AddElement(elO,13.3*CLHEP::perCent);
-    acrylic->AddElement(elC,33.3*CLHEP::perCent);
-    geoMan->SetDrawAtt(acrylic,kAzure+6,0.75);
-
-    // Print all the materials defined.
-    EDepSimLog(*(G4Material::GetMaterialTable()));
 }
 
+// DEPRECATED: Use the nist element table.
 G4Element* EDepSim::UserDetectorConstruction::DefineElement(G4String name,
                                                         G4String symbol,
                                                         G4double z) {

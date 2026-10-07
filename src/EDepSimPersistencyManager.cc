@@ -11,6 +11,7 @@
 #include "EDepSimTrajectoryPoint.hh"
 #include "EDepSimTrajectoryMap.hh"
 #include "EDepSimHitSegment.hh"
+#include "EDepSimHitSurface.hh"
 #include "EDepSimException.hh"
 #include "EDepSimUserRunAction.hh"
 #include "EDepSimLog.hh"
@@ -28,11 +29,14 @@
 #include <G4ParticleTable.hh>
 #include <G4SDManager.hh>
 #include <G4HCtable.hh>
+#include <G4AttDef.hh>
+#include <G4AttValue.hh>
 
 #include <G4SystemOfUnits.hh>
 #include <G4PhysicalConstants.hh>
 
 #include <memory>
+#include <typeinfo>
 
 // Handle foraging the edep-sim information into convenience classes that are
 // independent of geant4 and edep-sim internal dependencies.  The classes are
@@ -42,12 +46,13 @@
 // then it will create a simple tree that can be analyzed using root.  The
 // best way to access the tree is with the root interface to python (no
 // headers needed), or by using ROOT TFile::MakeProject.
-EDepSim::PersistencyManager::PersistencyManager()
-    : G4VPersistencyManager(), fFilename("/dev/null"),
-      fLengthThreshold(10*mm),
-      fGammaThreshold(5*MeV), fNeutronThreshold(50*MeV),
-      fTrajectoryPointAccuracy(1.*mm), fTrajectoryPointDeposit(0*MeV),
-      fSaveAllPrimaryTrajectories(true) {
+EDepSim::PersistencyManager::PersistencyManager():
+    G4VPersistencyManager(), fFilename("/dev/null"),
+    fLengthThreshold(10*mm),
+    fGammaThreshold(5*MeV), fNeutronThreshold(50*MeV),
+    fTrajectoryPointAccuracy(1.*mm), fTrajectoryPointDeposit(0*MeV),
+    fSaveAllPrimaryTrajectories(true),
+    fSaveAllTrajectories(std::nan("not-set")) {
     fPersistencyMessenger = new EDepSim::PersistencyMessenger(this);
 }
 
@@ -79,7 +84,7 @@ G4bool EDepSim::PersistencyManager::Store(const G4Event* anEvent) {
 G4bool EDepSim::PersistencyManager::Store(const G4Run* aRun) {
     if (!aRun) return false;
     EDepSimSevere(" -- Run store called without a save method for "
-               << "GEANT4 run " << aRun->GetRunID());
+                  << "GEANT4 run " << aRun->GetRunID());
     return false;
 }
 
@@ -87,7 +92,7 @@ G4bool EDepSim::PersistencyManager::Store(const G4Run* aRun) {
 G4bool EDepSim::PersistencyManager::Store(const G4VPhysicalVolume* aWorld) {
     if (!aWorld) return false;
     EDepSimSevere(" -- Geometry store called without a save method for "
-               << aWorld->GetName());
+                  << aWorld->GetName());
     return false;
 }
 
@@ -105,10 +110,44 @@ void EDepSim::PersistencyManager::ClearTrajectoryBoundaries() {
     fTrajectoryBoundaries.clear();
 }
 
+void EDepSim::PersistencyManager::AddTrajectoryRule(int process,
+                                                    int subprocess,
+                                                    double threshold,
+                                                    int category) {
+    if (category == 0) {
+        EDepSimError("Trajectory rule applies to nothing... skipped");
+        return;
+    }
+    fTrajectoryRules.emplace_back(
+        TrajectoryRule(process,subprocess,threshold,category));
+}
+
+bool EDepSim::PersistencyManager::MatchesTrajectoryRule(int process,
+                                                        int subprocess,
+                                                        double enr,
+                                                        int category) {
+    for (const TrajectoryRule& rule : fTrajectoryRules) {
+        if (enr < rule.fThreshold) {
+            continue;
+        }
+        if (rule.fProcess >= 0 and process != rule.fProcess) {
+            continue;
+        }
+        if (rule.fSubprocess >= 0 and subprocess != rule.fSubprocess) {
+            continue;
+        }
+        if (rule.fCategory >= 0 and (category & rule.fCategory) == 0) {
+            continue;
+        }
+        return true;
+    }
+    return false;
+}
+
 bool EDepSim::PersistencyManager::SaveTrajectoryBoundary(G4VTrajectory* g4Traj,
-                                                    G4StepStatus status,
-                                                    G4String currentVolume,
-                                                    G4String prevVolume) {
+                                                         G4StepStatus status,
+                                                         G4String currentVolume,
+                                                         G4String prevVolume) {
     if (status != fGeomBoundary) return false;
     std::string particleInfo = ":" + g4Traj->GetParticleName();
     if (std::abs(g4Traj->GetCharge())<0.1) particleInfo += ":neutral";
@@ -141,7 +180,9 @@ void EDepSim::PersistencyManager::UpdateSummaries(const G4Event* event) {
     EDepSimLog("Event Summary for run " << fEventSummary.RunId
                << " event " << fEventSummary.EventId);
 
-    // Summarize the trajectories first so that fTrackIdMap is filled.
+    // Summarize the trajectories first. This goes through the
+    // EDepSim::TrajectoryContainer and marks the trajectory objects that
+    // should be saved.
     MarkTrajectories(event);
 
     SummarizePrimaries(fEventSummary.Primaries,event->GetPrimaryVertex());
@@ -149,6 +190,10 @@ void EDepSim::PersistencyManager::UpdateSummaries(const G4Event* event) {
 
     SummarizeTrajectories(fEventSummary.Trajectories,event);
     EDepSimLog("   Trajectories " << fEventSummary.Trajectories.size());
+
+    SummarizePhotonDetectors(fEventSummary.PhotonDetectors, event);
+    EDepSimLog("   Photon Detectors "
+               << fEventSummary.PhotonDetectors.size());
 
     SummarizeSegmentDetectors(fEventSummary.SegmentDetectors, event);
     EDepSimLog("   Segment Detectors "
@@ -194,7 +239,7 @@ void EDepSim::PersistencyManager::SummarizePrimaries(
             vtx.Particles.push_back(prim);
         }
 
-        // Check to see if there is anyu user information associated with the
+        // Check to see if there is any user information associated with the
         // vertex.
         EDepSim::VertexInfo* srcInfo
             = dynamic_cast<EDepSim::VertexInfo*>(src->GetUserInformation());
@@ -225,10 +270,12 @@ void EDepSim::PersistencyManager::SummarizeTrajectories(
     TG4TrajectoryContainer& dest,
     const G4Event* event) {
     dest.clear();
-    MarkTrajectories(event);
+
+    // The trajectories that should be saved must have already been marked
+    // using MarkTrajectories()
 
     // Build a map of the original G4 TrackID to the new relocated TrackId
-    // (not capitalization).  This also uses the fact that maps are sorted as
+    // (note capitalization).  This also uses the fact that maps are sorted as
     // a hack to prevent writing a predicate to sort TG4Trajectories (because
     // I'm lazy).
     fTrackIdMap.clear();
@@ -249,9 +296,16 @@ void EDepSim::PersistencyManager::SummarizeTrajectories(
          t != trajectories->GetVector()->end();
          ++t) {
         EDepSim::Trajectory* ndTraj = dynamic_cast<EDepSim::Trajectory*>(*t);
+        if (ndTraj == nullptr) {
+            EDepSimError("Trajectory MUST be an EDepSim::Trajectory");
+            throw;
+        }
 
         // Check if the trajectory should be saved.
-        if (!ndTraj->SaveTrajectory()) continue;
+        if (!ndTraj->SaveTrajectory()) {
+            EDepSimTrace("Skip " << ndTraj->GetTrackID());
+            continue;
+        }
 
         // Set the particle type information.
         G4ParticleDefinition* part
@@ -259,8 +313,8 @@ void EDepSim::PersistencyManager::SummarizeTrajectories(
                 ndTraj->GetParticleName());
         if (!part) {
             EDepSimError(std::string("EDepSim::RootPersistencyManager::")
-                      + "No particle information for "
-                      + ndTraj->GetParticleName());
+                         + "No particle information for "
+                         + ndTraj->GetParticleName());
         }
 
         fTrackIdMap[ndTraj->GetTrackID()] = index++;
@@ -280,11 +334,11 @@ void EDepSim::PersistencyManager::SummarizeTrajectories(
             if (traj.ParentId == 0) break;
             EDepSim::Trajectory* pTraj
                 = dynamic_cast<EDepSim::Trajectory*>(
-                    EDepSim::TrajectoryMap::Get(traj.ParentId));
+                    EDepSim::TrajectoryMap::Get(traj.ParentId,event));
             if (!pTraj) {
-                EDepSimError("Trajectory " << traj.ParentId << " does not exist");
+                EDepSimError("Trajectory " << traj.ParentId
+                             << " does not exist");
                 throw;
-                break;
             }
             if (pTraj->SaveTrajectory()) break;
             traj.ParentId = pTraj->GetParentID();
@@ -315,8 +369,12 @@ void EDepSim::PersistencyManager::SummarizeTrajectories(
     for (TG4TrajectoryContainer::iterator
              t = dest.begin();
          t != dest.end(); ++t) {
-        t->TrackId = fTrackIdMap[t->TrackId];
-        t->ParentId = fTrackIdMap[t->ParentId];
+        TrackIdMap::iterator id = fTrackIdMap.find(t->TrackId);
+        if (id == fTrackIdMap.end()) EDepSimThrow("Bad track id");
+        t->TrackId = id->second;
+        id = fTrackIdMap.find(t->ParentId);
+        if (id == fTrackIdMap.end()) EDepSimThrow("Bad track id");
+        t->ParentId = id->second;
     }
 
 }
@@ -334,6 +392,9 @@ void EDepSim::PersistencyManager::MarkTrajectories(const G4Event* event) {
     //       1) a daughter deposited energy in a sensitive detector
     //       2) or, SaveAllPrimaryTrajectories() is true
     //
+    //   ** Trajectories that the user has explicitly requested by
+    //         setting a /edep/db/set/trajectoryRule
+    //
     //   ** Trajectories created by a particle decay if
     //       1) a daughter deposited energy in a sensitve detector
     //       2) or, SaveAllPrimaryTrajectories() is true.
@@ -348,8 +409,14 @@ void EDepSim::PersistencyManager::MarkTrajectories(const G4Event* event) {
          t != trajectories->GetVector()->end();
          ++t) {
         EDepSim::Trajectory* ndTraj = dynamic_cast<EDepSim::Trajectory*>(*t);
+        if (ndTraj == nullptr) {
+            EDepSimError("Trajectory MUST be an EDepSim::Trajectory");
+            throw;
+        }
         std::string particleName = ndTraj->GetParticleName();
         std::string processName = ndTraj->GetProcessName();
+        int processType = ndTraj->GetProcessType();
+        int processSubtype = ndTraj->GetProcessSubType();
         double initialMomentum = ndTraj->GetInitialMomentum().mag();
 
         // Check if all primary particle trajectories should be saved.  The
@@ -365,6 +432,25 @@ void EDepSim::PersistencyManager::MarkTrajectories(const G4Event* event) {
             }
         }
 
+        // Check if the user as explicitly asked for this trajectory by
+        // setting a value for the /edep/db/set/trajectoryRule macro command.
+        // The argument "1" flags that this is checking for a trajectory, and
+        // not a trajectory point.
+        if (MatchesTrajectoryRule(processType, processSubtype,
+                                  initialMomentum, 1)) {
+            // Save this trajectory, and it's immediate parent.
+            ndTraj->MarkTrajectory(1);
+            continue;
+        }
+
+        // Check if everything should be saved.
+        if (std::isfinite(GetSaveAllTrajectories())) {
+            if (initialMomentum > GetSaveAllTrajectories()) {
+                ndTraj->MarkTrajectory();
+                continue;
+            }
+        }
+
         // Don't save the neutrinos
         if (particleName == "anti_nu_e") continue;
         if (particleName == "anti_nu_mu") continue;
@@ -373,20 +459,23 @@ void EDepSim::PersistencyManager::MarkTrajectories(const G4Event* event) {
         if (particleName == "nu_mu") continue;
         if (particleName == "nu_tau") continue;
 
-        // Save any decay product if it caused any energy deposit.
+        // Save any decay product if it caused any energy deposit at all, or
+        // all decay products if all primaries are suppose to be saved.
         if (processName == "Decay") {
             if (ndTraj->GetSDTotalEnergyDeposit()>1*eV
                 || GetSaveAllPrimaryTrajectories()) {
-                ndTraj->MarkTrajectory(false);
+                // Make sure the parent is also saved.
+                ndTraj->MarkTrajectory(1);
                 continue;
             }
         }
 
         // Save particles that produce charged track inside a sensitive
-        // detector.  This doesn't automatically save, but the parents will be
-        // automatically considered for saving by the next bit of code.
+        // detector.  This doesn't automatically save the parents, but the
+        // parents will be automatically considered for saving by the next bit
+        // of code.
         if (ndTraj->GetSDLength() > GetLengthThreshold()) {
-            ndTraj->MarkTrajectory(false);
+            ndTraj->MarkTrajectory(0);
             continue;
         }
 
@@ -400,7 +489,7 @@ void EDepSim::PersistencyManager::MarkTrajectories(const G4Event* event) {
         // energy in a sensitive detector.  This only affects secondary
         // photons since primary photons are handled above.
         if (particleName == "gamma" && initialMomentum > GetGammaThreshold()) {
-            ndTraj->MarkTrajectory(false);
+            ndTraj->MarkTrajectory(0);
             continue;
         }
 
@@ -408,8 +497,9 @@ void EDepSim::PersistencyManager::MarkTrajectories(const G4Event* event) {
         // in a sensitive detector.  This only affects secondary neutrons
         // since primary neutrons are controlled above.
         if (particleName == "neutron"
-            && initialMomentum > GetNeutronThreshold()) {
-            ndTraj->MarkTrajectory(false);
+            && (initialMomentum > GetNeutronThreshold()
+                || ndTraj->GetSDTotalEnergyDeposit() > GetNeutronThreshold())) {
+            ndTraj->MarkTrajectory(0);
             continue;
         }
     }
@@ -417,44 +507,62 @@ void EDepSim::PersistencyManager::MarkTrajectories(const G4Event* event) {
     // Go through all of the event hit collections and make sure that all
     // primary trajectories and trajectories contributing to a hit are saved.
     // These are mostly a sub-set of the trajectories marked in the previous
-    // step, but there are a few corner cases where trajectories are not saved
-    // because of theshold issues.
+    // step, but there are a few corner cases, like short tracks, where
+    // trajectories are not saved because of thesholds.  Everything that makes
+    // a hit is saved.
     G4HCofThisEvent* hitCollections = event->GetHCofThisEvent();
     if (!hitCollections) return;
     for (int i=0; i < hitCollections->GetNumberOfCollections(); ++i) {
         G4VHitsCollection* g4Hits = hitCollections->GetHC(i);
         if (g4Hits->GetSize()<1) continue;
         for (unsigned int h=0; h<g4Hits->GetSize(); ++h) {
-            EDepSim::HitSegment* g4Hit
+
+            // Explicitly save the primaries.  It will probably be marked
+            // again with the contributors, but that's OK.  This catches some
+            // corner cases where the primary isn't what you would expect.
+            // This will mark decay products as primaries, and then the
+            // primary for the decay product too.
+            int primaryId = 0;
+
+            // Get the primary id if this is a HitSegment.
+            EDepSim::HitSegment* g4HitSeg
                 = dynamic_cast<EDepSim::HitSegment*>(g4Hits->GetHit(h));
-            if (!g4Hit) {
-                EDepSimError("Not a hit segment");
-                continue;
+            if (g4HitSeg) primaryId = g4HitSeg->GetPrimaryTrajectoryId();
+
+            // Get the primary id if this is a HitSurface
+            EDepSim::HitSurface* g4HitSurf
+                = dynamic_cast<EDepSim::HitSurface*>(g4Hits->GetHit(h));
+            if (g4HitSurf) {
+                primaryId = g4HitSurf->GetPrimaryTrajectoryId();
             }
 
-            // Explicitly save the primary.  It will probably be marked again
-            // with the contributors, but that's OK.  This catches some corner
-            // cases where the primary isn't what you would expect.
-            int primaryId = g4Hit->GetPrimaryTrajectoryId();
-            EDepSim::Trajectory* ndTraj
-                = dynamic_cast<EDepSim::Trajectory*>(
-                    EDepSim::TrajectoryMap::Get(primaryId));
-            if (ndTraj) {
-                ndTraj->MarkTrajectory(false);
-            }
-            else {
-                EDepSimError("Primary trajectory not found");
+            while (primaryId > 0) {
+                EDepSim::Trajectory* ndTraj
+                    = dynamic_cast<EDepSim::Trajectory*>(
+                        EDepSim::TrajectoryMap::Get(primaryId,event));
+                if (ndTraj) {
+                    ndTraj->MarkTrajectory(0);
+                }
+                else {
+                    EDepSimWarn("Primary trajectory not found");
+                    break;
+                }
+                int parentId = ndTraj->GetParentID();
+                if (parentId <= 0) break;
+                primaryId
+                    = EDepSim::TrajectoryMap::FindPrimaryId(parentId,event);
             }
 
             // Make sure that all the contributors associated with this hit
             // are saved.
-            for (int j = 0; j < g4Hit->GetContributorCount(); ++j) {
-                int contribId = g4Hit->GetContributor(j);
+            if (g4HitSeg == nullptr) continue;
+            for (int j = 0; j < g4HitSeg->GetContributorCount(); ++j) {
+                int contribId = g4HitSeg->GetContributor(j);
                 EDepSim::Trajectory* contribTraj
                     = dynamic_cast<EDepSim::Trajectory*>(
-                        EDepSim::TrajectoryMap::Get(contribId));
+                        EDepSim::TrajectoryMap::Get(contribId,event));
                 if (contribTraj) {
-                    contribTraj->MarkTrajectory(false);
+                    contribTraj->MarkTrajectory(0);
                 }
                 else {
                     EDepSimError("Contributor trajectory not found");
@@ -465,7 +573,7 @@ void EDepSim::PersistencyManager::MarkTrajectories(const G4Event* event) {
 }
 
 void EDepSim::PersistencyManager::CopyTrajectoryPoints(TG4Trajectory& traj,
-                                                  G4VTrajectory* g4Traj) {
+                                                       G4VTrajectory* g4Traj) {
     std::vector<int> selected;
 
     // Choose the trajectory points that are going to be saved.
@@ -498,6 +606,66 @@ void EDepSim::PersistencyManager::CopyTrajectoryPoints(TG4Trajectory& traj,
 }
 
 void
+EDepSim::PersistencyManager::SummarizePhotonDetectors(
+    TG4PhotonHitDetectors& dest,
+    const G4Event* event) {
+    dest.clear();
+
+    G4HCofThisEvent* HCofEvent = event->GetHCofThisEvent();
+    if (!HCofEvent) return;
+    G4SDManager *sdM = G4SDManager::GetSDMpointer();
+    G4HCtable *hcT = sdM->GetHCtable();
+    // Copy each of the hit categories into the output event.
+    for (int i=0; i<hcT->entries(); ++i) {
+        G4String SDname = hcT->GetSDname(i);
+        G4String HCname = hcT->GetHCname(i);
+        int HCId = sdM->GetCollectionID(SDname+"/"+HCname);
+        G4VHitsCollection* g4Hits = HCofEvent->GetHC(HCId);
+        if (!g4Hits || g4Hits->GetSize()<1) continue;
+        EDepSim::HitSurface* hitSurf
+            = dynamic_cast<EDepSim::HitSurface*>(g4Hits->GetHit(0));
+        if (!hitSurf) continue;
+        SummarizePhotonHits(dest[SDname],g4Hits);
+    }
+}
+
+void
+EDepSim::PersistencyManager::SummarizePhotonHits(TG4PhotonHitContainer& dest,
+                                                 G4VHitsCollection* g4Hits) {
+    dest.clear();
+
+    EDepSim::HitSurface* g4HitSurf
+        = dynamic_cast<EDepSim::HitSurface*>(g4Hits->GetHit(0));
+    if (!g4HitSurf) return;
+
+    int photonHits = 0;
+    for (std::size_t h=0; h<g4Hits->GetSize(); ++h) {
+        g4HitSurf = dynamic_cast<EDepSim::HitSurface*>(g4Hits->GetHit(h));
+        int primaryId = -1;
+        TrackIdMap::iterator t
+            = fTrackIdMap.find(g4HitSurf->GetPrimaryTrajectoryId());
+        if (t != fTrackIdMap.end()) {
+            primaryId = t->second;
+        }
+
+        ++photonHits;
+        TG4PhotonHit hit;
+        hit.PrimaryId = primaryId;
+        hit.Process = g4HitSurf->GetProcessSubtype();
+        hit.EnergyDeposit = g4HitSurf->GetEnergyDeposit();
+        hit.Start.SetXYZT(g4HitSurf->GetStart().x(),
+                          g4HitSurf->GetStart().y(),
+                          g4HitSurf->GetStart().z(),
+                          g4HitSurf->GetStart().t());
+        hit.Stop.SetXYZT(g4HitSurf->GetPosition().x(),
+                         g4HitSurf->GetPosition().y(),
+                         g4HitSurf->GetPosition().z(),
+                         g4HitSurf->GetPosition().t());
+        dest.push_back(hit);
+    }
+}
+
+void
 EDepSim::PersistencyManager::SummarizeSegmentDetectors(
     TG4HitSegmentDetectors& dest,
     const G4Event* event) {
@@ -513,44 +681,53 @@ EDepSim::PersistencyManager::SummarizeSegmentDetectors(
         G4String HCname = hcT->GetHCname(i);
         int HCId = sdM->GetCollectionID(SDname+"/"+HCname);
         G4VHitsCollection* g4Hits = HCofEvent->GetHC(HCId);
-        if (g4Hits->GetSize()<1) continue;
+        if (!g4Hits || g4Hits->GetSize()<1) continue;
         EDepSim::HitSegment* hitSeg
             = dynamic_cast<EDepSim::HitSegment*>(g4Hits->GetHit(0));
         if (!hitSeg) continue;
-        SummarizeHitSegments(dest[SDname],g4Hits);
+        SummarizeHitSegments(event, dest[SDname],g4Hits);
     }
 }
 
 void
-EDepSim::PersistencyManager::SummarizeHitSegments(TG4HitSegmentContainer& dest,
-                                             G4VHitsCollection* g4Hits) {
+EDepSim::PersistencyManager::SummarizeHitSegments(const G4Event* event,
+                                                  TG4HitSegmentContainer& dest,
+                                                  G4VHitsCollection* g4Hits) {
     dest.clear();
 
-    EDepSim::HitSegment* g4Hit = dynamic_cast<EDepSim::HitSegment*>(g4Hits->GetHit(0));
-    if (!g4Hit) return;
+    EDepSim::HitSegment* g4HitSeg
+        = dynamic_cast<EDepSim::HitSegment*>(g4Hits->GetHit(0));
+    if (!g4HitSeg) return;
 
     for (std::size_t h=0; h<g4Hits->GetSize(); ++h) {
-        g4Hit = dynamic_cast<EDepSim::HitSegment*>(g4Hits->GetHit(h));
+        g4HitSeg = dynamic_cast<EDepSim::HitSegment*>(g4Hits->GetHit(h));
         TG4HitSegment hit;
-        hit.PrimaryId = fTrackIdMap[g4Hit->GetPrimaryTrajectoryId()];
-        hit.EnergyDeposit = g4Hit->GetEnergyDeposit();
-        hit.SecondaryDeposit = g4Hit->GetSecondaryDeposit();
-        hit.TrackLength = g4Hit->GetTrackLength();
-        CopyHitContributors(hit.Contrib,g4Hit->GetContributors());
-        hit.Start.SetXYZT(g4Hit->GetStart().x(),
-                          g4Hit->GetStart().y(),
-                          g4Hit->GetStart().z(),
-                          g4Hit->GetStart().t());
-        hit.Stop.SetXYZT(g4Hit->GetStop().x(),
-                          g4Hit->GetStop().y(),
-                          g4Hit->GetStop().z(),
-                          g4Hit->GetStop().t());
+        TrackIdMap::iterator t
+            = fTrackIdMap.find(g4HitSeg->GetPrimaryTrajectoryId());
+        if (t == fTrackIdMap.end()) {
+            EDepSimThrow("Invalid primary id");
+        }
+        hit.PrimaryId = t->second;
+        hit.EnergyDeposit = g4HitSeg->GetEnergyDeposit();
+        hit.SecondaryDeposit = g4HitSeg->GetSecondaryDeposit();
+        hit.TrackLength = g4HitSeg->GetTrackLength();
+        CopyHitContributors(event,hit.Contrib,g4HitSeg->GetContributors());
+        hit.Start.SetXYZT(g4HitSeg->GetStart().x(),
+                          g4HitSeg->GetStart().y(),
+                          g4HitSeg->GetStart().z(),
+                          g4HitSeg->GetStart().t());
+        hit.Stop.SetXYZT(g4HitSeg->GetStop().x(),
+                         g4HitSeg->GetStop().y(),
+                         g4HitSeg->GetStop().z(),
+                         g4HitSeg->GetStop().t());
         dest.push_back(hit);
     }
 }
 
-void EDepSim::PersistencyManager::CopyHitContributors(std::vector<int>& dest,
-                                                 const std::vector<int>& src) {
+void EDepSim::PersistencyManager::CopyHitContributors(
+    const G4Event* event,
+    std::vector<int>& dest,
+    const std::vector<int>& src) {
 
     dest.clear();
 
@@ -561,23 +738,21 @@ void EDepSim::PersistencyManager::CopyHitContributors(std::vector<int>& dest,
         // to a parent that is.
         EDepSim::Trajectory* ndTraj
             = dynamic_cast<EDepSim::Trajectory*>(
-                EDepSim::TrajectoryMap::Get(*c));
+                EDepSim::TrajectoryMap::Get(*c,event));
         while (ndTraj && !ndTraj->SaveTrajectory()) {
             ndTraj = dynamic_cast<EDepSim::Trajectory*>(
-                EDepSim::TrajectoryMap::Get(ndTraj->GetParentID()));
+                EDepSim::TrajectoryMap::Get(ndTraj->GetParentID(),event));
         }
         if (!ndTraj) {
             dest.push_back(-1);
             continue;
         }
-        if (fTrackIdMap.find(ndTraj->GetTrackID()) != fTrackIdMap.end()) {
-            dest.push_back(fTrackIdMap[ndTraj->GetTrackID()]);
+        TrackIdMap::iterator t = fTrackIdMap.find(ndTraj->GetTrackID());
+        if (t == fTrackIdMap.end()) {
+            EDepSimThrow("Contributor with unknown trajectory: "
+                         << ndTraj->GetTrackID());
         }
-        else {
-            EDepSimError("Contributor with unknown trajectory: "
-                      << ndTraj->GetTrackID());
-            dest.push_back(-2);
-        }
+        dest.push_back(t->second);
     }
 
     // Remove the duplicate entries.
@@ -608,7 +783,7 @@ double EDepSim::PersistencyManager::FindTrajectoryAccuracy(
 }
 
 int EDepSim::PersistencyManager::SplitTrajectory(G4VTrajectory* g4Traj,
-                                            int point1, int point2) {
+                                                 int point1, int point2) {
 
     int point3 = 0.5*(point1 + point2);
     if (point3 <= point1) EDepSimThrow("Points too close to split");
@@ -635,11 +810,22 @@ EDepSim::PersistencyManager::SelectTrajectoryPoints(std::vector<int>& selected,
                                                     G4VTrajectory* g4Traj) {
 
     selected.clear();
-    if (g4Traj->GetPointEntries() < 1) {
-        EDepSimError("Trajectory with no points"
+
+    // Only save points for EDepSim::Trajectory
+    EDepSim::Trajectory* ndTraj = dynamic_cast<EDepSim::Trajectory*>(g4Traj);
+    if (ndTraj == nullptr) {
+        EDepSimError("Trajectory not from EDepSim"
                      << " " << g4Traj->GetTrackID()
                      << " " << g4Traj->GetParentID()
                      << " " << g4Traj->GetParticleName());
+        return;
+    }
+
+    if (ndTraj->GetPointEntries() < 1) {
+        EDepSimError("Trajectory with no points"
+                     << " " << ndTraj->GetTrackID()
+                     << " " << ndTraj->GetParentID()
+                     << " " << ndTraj->GetParticleName());
         return;
     }
 
@@ -651,12 +837,12 @@ EDepSim::PersistencyManager::SelectTrajectoryPoints(std::vector<int>& selected,
     /////////////////////////////////////
     // Save the last point of the trajectory.
     /////////////////////////////////////
-    int lastIndex = g4Traj->GetPointEntries()-1;
+    int lastIndex = ndTraj->GetPointEntries()-1;
     if (lastIndex < 1) {
         EDepSimError("Trajectory with one point"
-                     << " " << g4Traj->GetTrackID()
-                     << " " << g4Traj->GetParentID()
-                     << " " << g4Traj->GetParticleName());
+                     << " " << ndTraj->GetTrackID()
+                     << " " << ndTraj->GetParentID()
+                     << " " << ndTraj->GetParticleName());
         return;
     }
     selected.push_back(lastIndex);
@@ -668,51 +854,92 @@ EDepSim::PersistencyManager::SelectTrajectoryPoints(std::vector<int>& selected,
     // starting and stopping point of the particle are recorded in the
     // trajectory.
     //////////////////////////////////////////////
-    EDepSim::Trajectory* ndTraj = dynamic_cast<EDepSim::Trajectory*>(g4Traj);
-    if (ndTraj->GetSDTotalEnergyDeposit() < 1*eV) return;
+    if (ndTraj->GetSDTotalEnergyDeposit() < 1*eV) return; // ~1.2 um photon
 
+    //////////////////////////////////////////////
     // Find the trajectory points where particles are entering and leaving the
     // detectors.
+    //////////////////////////////////////////////
     EDepSim::TrajectoryPoint* edepPoint
-        = dynamic_cast<EDepSim::TrajectoryPoint*>(g4Traj->GetPoint(0));
+        = dynamic_cast<EDepSim::TrajectoryPoint*>(ndTraj->GetPoint(0));
     G4String prevVolumeName = edepPoint->GetPhysVolName();
     for (int tp = 1; tp < lastIndex; ++tp) {
         edepPoint
-            = dynamic_cast<EDepSim::TrajectoryPoint*>(g4Traj->GetPoint(tp));
+            = dynamic_cast<EDepSim::TrajectoryPoint*>(ndTraj->GetPoint(tp));
+        if (edepPoint == nullptr) {
+            EDepSimError("ndTraj " << typeid(*ndTraj).name());
+            EDepSimError("g4Point " << typeid(*ndTraj->GetPoint(tp)).name());
+            EDepSimError("Trajectory with invalid point"
+                         << " " << ndTraj->GetTrackID()
+                         << " " << ndTraj->GetParentID()
+                         << " " << ndTraj->GetParticleName());
+            if (ndTraj->GetAttDefs()) {
+                for (auto& p : *ndTraj->GetAttDefs()) {
+                    EDepSimError("  Att Def " << p.first
+                                 << ";" << p.second.GetName()
+                                 << ";" << p.second.GetDesc()
+                                 << ";" << p.second.GetExtra()
+                                 << ";" << p.second.GetValueType());
+                }
+            }
+            if (ndTraj->CreateAttValues()) {
+                for (auto& v : *ndTraj->CreateAttValues()){
+                    EDepSimError("  Att Val "
+                                 << v.GetName()
+                                 << ";" << v.GetValue()
+                                 << ";" << v.GetShowLabel());
+                }
+            }
+
+            throw;
+        }
         G4String volumeName = edepPoint->GetPhysVolName();
         // Save the point on a boundary crossing for volumes where we are
         // saving the entry and exit points.
-        if (SaveTrajectoryBoundary(g4Traj,edepPoint->GetStepStatus(),
+        if (SaveTrajectoryBoundary(ndTraj,edepPoint->GetStepStatus(),
                                    volumeName,prevVolumeName)) {
             selected.push_back(tp);
         }
         prevVolumeName = volumeName;
     }
 
-    // Save trajectory points where there is a "big" interaction.
+    //////////////////////////////////////////////
+    // Save trajectory points where there is an "interesting" step.
+    //////////////////////////////////////////////
     for (int tp = 1; tp < lastIndex; ++tp) {
         edepPoint
-            = dynamic_cast<EDepSim::TrajectoryPoint*>(g4Traj->GetPoint(tp));
-        // Just navigation....
+            = dynamic_cast<EDepSim::TrajectoryPoint*>(ndTraj->GetPoint(tp));
+        // Apply the trajectory point rules first to see if the user has asked
+        // for this specific point.  A point might be selected multiple times,
+        // but that's OK because duplicates will be rejected later.
+        if (MatchesTrajectoryRule(edepPoint->GetProcessType(),
+                                  edepPoint->GetProcessSubType(),
+                                  edepPoint->GetProcessDeposit(),
+                                  2)) {
+            selected.push_back(tp);
+        }
+        // Don't save pure navigation....
         if (edepPoint->GetProcessType() == fTransportation) continue;
-        // Not much energy deposit...
-        if (edepPoint->GetProcessDeposit() < GetTrajectoryPointDeposit())
-            continue;
-        // Don't save optical photons...
-        if (edepPoint->GetProcessType() == fOptical) continue;
-        // Not a physics step...
+        // Don't save book keeping steps (i.e. not a physics step)...
         if (edepPoint->GetProcessType() == fGeneral) continue;
         if (edepPoint->GetProcessType() == fUserDefined) continue;
-        // Don't save continuous ionization steps.
+        // Don't save continuous ionization steps...
         if (edepPoint->GetProcessType() == fElectromagnetic
             && edepPoint->GetProcessSubType() == fIonisation) continue;
-        // Don't save multiple scattering.
+        // Don't save multiple scattering steps...
         if (edepPoint->GetProcessType() == fElectromagnetic
             && edepPoint->GetProcessSubType() == fMultipleScattering) continue;
+        // Don't save optical photon steps...
+        if (edepPoint->GetProcessType() == fOptical) continue;
+        // Don't save things below the threshold...
+        if (edepPoint->GetProcessDeposit() < GetTrajectoryPointDeposit())
+            continue;
         selected.push_back(tp);
     }
 
+    //////////////////////////////////////////////
     // Make sure there aren't any duplicates in the selected trajectory points.
+    //////////////////////////////////////////////
     std::sort(selected.begin(), selected.end());
     selected.erase(std::unique(selected.begin(), selected.end()),
                    selected.end());
@@ -728,9 +955,9 @@ EDepSim::PersistencyManager::SelectTrajectoryPoints(std::vector<int>& selected,
              ++p1) {
             std::vector<int>::iterator p2 = p1+1;
             if (p2==selected.end()) break;
-            double trajectoryAccuracy = FindTrajectoryAccuracy(g4Traj,*p1,*p2);
+            double trajectoryAccuracy = FindTrajectoryAccuracy(ndTraj,*p1,*p2);
             if (trajectoryAccuracy <= desiredAccuracy) continue;
-            int split = SplitTrajectory(g4Traj,*p1,*p2);
+            int split = SplitTrajectory(ndTraj,*p1,*p2);
             if (split < 0) continue;
             selected.push_back(split);
             addPoint = true;

@@ -1,15 +1,15 @@
-message("Energy Deposition Simulation")
+message(STATUS "Build Energy Deposition Simulation")
 
 # Suck up all of the .cc files for the source.  This isn't good CMAKE
 # practice, but it makes maintaining this file easier.
 # file(GLOB_RECURSE source *.cc)
 # file(GLOB_RECURSE includes EDepSim*.hh)
 file(GLOB edep_source *.cc)
-file(GLOB edep_includes *.cc)
+file(GLOB edep_includes *.hh)
 file(GLOB captain_source captain/*.cc)
-file(GLOB captain_includes captain/EDepSim*.hh)
+file(GLOB captain_includes captain/*.hh)
 file(GLOB kinem_source kinem/*.cc)
-file(GLOB kinem_includes kinem/EDepSim*.hh)
+file(GLOB kinem_includes kinem/*.hh)
 
 if(EDEPSIM_USE_NEST)
   file(GLOB nest_source NESTVersion098/*.cc)
@@ -50,4 +50,5 @@ install(TARGETS edepsim
   INCLUDES DESTINATION include/EDepSim )
 
 # Install the header files.
-install(FILES ${includes} DESTINATION include/EDepSim)
+install(FILES ${edep_includes} DESTINATION include/EDepSim)
+install(FILES ${kinem_includes} DESTINATION include/EDepSim/kinem)

@@ -1,11 +1,163 @@
-Changes in XXXXX
+Changes in 4.4.0
 
-* EDepSim::HitSegment -- Add a new parameter to control when very
-  short tracks (e.g. delta rays) are combined with an existing hit
-  segment.  This was previously controlled by the maximum allowed
-  segment sagitta.  The sagitta and separation for segments can now be
-  controlled by the /edep/hitSagitta (previously existed) and
-  /edep/hitSeparation (new) macro commands.
+* Feature: Add the ctest interface to the build system. The existing
+  tests are aimed at testing the full executables, but this provides a
+  base for future work.
+
+* Feature: Update the Doke-Birks model for liquid argon so that it can
+  handle the case without an electric field. The model now checks if
+  an explicit Birks constant has been defined a material before
+  applying the Doke-Birks model (which only applies for pure
+  LAr).
+
+* Feature: Add support to manage externally filled (GPU-offloaded)
+  photon hits. The offloading is managed through the external user
+  action interface, but adding the hits to the output required some
+  internal changes.
+
+* Feature: Add the G4CutTub shape.
+
+* Bug Fix: Fix the Em Saturation model so that it is correctly
+  initialized after the materials are initialized.
+
+* Bug Fix: Call G4UserEventAction::EndOfEventAction in the right
+  places.  Previously it was only called when the event had
+  ionization, which meant that "photon" only events didn't call the
+  action and didn't have correct photon off-loading.
+
+* Work-around: Add support for LArSoft GDML.  This adds support for
+  the LArSoft spelling of the electric field (i.e. Efield with a
+  default direction along the X axis), and a way to work around
+  LArSoft not specifying the electric field direction by adding the
+  option EfieldDir field auxillary type. Note: The "Efield" workaround
+  lacks the generality of the preferred GDML auxillary tag ("EField")
+  and is provided to work around old GDML files.
+
+* Work-around: Add support for LArSoft GDML files with partial
+  material property definitions that result in the argon being state
+  as either unspecified, or solid. Argon is assumed to be liquid when
+  the state isn't specified.  Solid argon exists, but is assumed to be
+  liquid so that old GDML files work. In the future, assuming solid
+  argon is liquid argon will require setting an option in the macro
+  file.
+
+* Expose the EDepSim::PersistencyManager::fEventSummary and members with
+  `const& const` getters.  This augments the preferred way to access the
+  event summary which is to derive from PersistencyManager and directly
+  access the fEventSummary field.
+
+Changes in 4.3.0
+
+* Add the capability to save both trajectories and trajectory points
+  based on the process that created the trajectory. The process is
+  specified using the integer valued `process type` and `process
+  subtype` that are defined by GEANT4.
+
+* Improve the CMake build to improve interaction between ROOT and the
+  user application.  ROOT expects the project compiled with a specific
+  standard for CXX. The EDepSim CMakeLists.txt has been changed to
+  check if MAKE_CXX_STANDARD has been set, and then compares against
+  the standard that ROOT expects. If there is a mismatch, a warning is
+  produced. EDepSim no longer assumes that the ROOT Geom component is
+  present, and will not try to build the display if it has not been
+  found.
+
+* Reorganize and expand the README documentation so that it is not in
+  a single file.  The README.md file was getting to long to be
+  managable, so now topics are broken out into their own files.  The
+  main README.md has pointers to the files to check for specific
+  topics.
+
+Changes in 4.2.0
+
+* Users can dynamically load a G4VPhysicsConstructor to add extra
+  physics to the geant physics list.  This constructor will be
+  registered after G4OpticalPhysics, and before EDepSim::ExtraPhysics.
+  The constructor is specified in the EXTRAPHYSICS environment
+  variable as "EXTRA:library-path:symbol-name".  The symbol name
+  should specify a C function with the signature
+  `G4VModularPhysicsList* (*)(char*)`.  The "EXTRA" prefix is
+  required.
+
+* Users can dynamically load a G4VModularPhysics to override the GEANT
+  reference physics lists by setting the PHYSLIST environment variable
+  to "EXTERN:library-path:symbol-name".  The symbol name should
+  specify a C function with the signature `G4VModularPhysicsList*
+  (*)(char*)`.
+
+* Users can dynamically load run, event, tracking and stepping user
+  actions that will be called as part of the equivalent EDepSim user
+  actions.
+
+* Users can dynamically load a kinematics generator using the
+  /edep/generator/external/ macro commands.
+
+* Fix: Add protection to the SurfaceSD for when the process pointer is
+  not available.
+
+* Update how the trajectory mapping is done so that it can be thread
+  safe. This release is not thread safe (this is the first step in
+  updating architecture).
+  
+Changes in 4.1.0
+
+* Leverage the work of Xuying Ning <xning@bnl.gov> to support tracking
+  and saving of vanilla optical photons.  This includes all of the
+  infrastructure in the main code to handle the optical physics, but
+  also adds PhotonDetectors to the edep-sim i/o package and the simple
+  included event display.
+
+* The old G4 v10 interfaces are not sufficiently compatible with G4
+  v11 to be easily supported, so support for V10 is dropped.  It's
+  possible that v10 support can be restored, but, for now, it is not a
+  priority. Note: The last G4 v10 release (10.7) was in 2020, and the
+  last fix was 2022 (10.7.4).
+
+* Update how sensitive detectors are parsed in GDML.  Deprecate
+  "SensDet", but still have it create a "SegmentSD".  Add
+  "SegmentDetector" as the best way to create a SegmentSD, and
+  "SurfaceDetector" as the (only) way to create a SurfaceSD.
+
+* Fix the installation location of EDepSim include files so external
+  packages can compile using CMAKE.
+
+Changes in 4.0.0
+
+* Support G4 v11: The code is largely upgraded to primarily support the G4
+  v11 coding practices.  Testing and development is done using G4.11.  The
+  G4 v10 interface is still supported via `ifdef` using G4Version, and will
+  be supported as long as it remains compatible with newer G4 versions.
+
+* The Doke-Birks model has been integrated with G4EmSaturation and
+  G4EmParameters so that it can be used everyplace.  It's added to the
+  G4EmParameters in the physics list. It will now be correctly applied to
+  optical processes like scintillation.
+
+* Trajectory point selection: Trajectory points can be selected based on
+  the process and sub-process which generated them with a minimum threshold
+  applied based on the interaction occurring at the point.
+
+* HepEVT Kinematics -- Add features ot the HEPEvt reader from Andrew Mogan.
+  The flexibility is extended, and allows for multi-vertex events.  The new
+  reader can handle mother/daughter relationships.
+
+* EDepSim::HitSegment -- Add a new parameter to control when very short
+  tracks (e.g. delta rays) are combined with an existing hit segment.  This
+  was previously controlled by the maximum allowed segment sagitta.  The
+  sagitta and separation for segments can now be controlled by the
+  /edep/hitSagitta (previously existed) and /edep/hitSeparation (new) macro
+  commands.
+
+* Change EDepSimLog to use G4cout so that the full GEANT4 ios interface is
+  leveraged.
+
+* Issue #47: Make sure that decay products and their parent trajectories
+  are saved. A macro to force all trajectories to be saved has been added
+  to aid in debugging.
+
+* Updated geometry definitions: Several new geometry definitions have been
+  merged from the DUNE fork to allow more of the G4 volumes to be exported
+  to ROOT.
 
 Changes in 3.2.0
 

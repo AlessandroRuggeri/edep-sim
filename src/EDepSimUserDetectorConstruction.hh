@@ -58,22 +58,47 @@ public:
         fExcludeAsSensitiveDetector.push_back(exclude);
     }
 
+    class UserUpdateGeometryAction {
+    public:
+        UserUpdateGeometryAction() {};
+        virtual ~UserUpdateGeometryAction() {}
+
+        /// Notify the class that the geometry has changed.  This must not
+        /// change the state of Geant4 or EDepSim.
+        virtual void UpdateGeometry(const G4VPhysicalVolume* world) {};
+
+    };
+
+    /// Add a external user action to be called when the geometry has been
+    /// updated.  pre and post actions.  The external action can collect
+    /// information about the geometry, but must not modify the state of G4,
+    /// or EDepSim.
+    void AddExternalAction (
+        EDepSim::UserDetectorConstruction::UserUpdateGeometryAction* action)
+        const {
+        fExternalActions.push_back(action);
+    }
+
 protected:
 
-    /// Define the materials used in the detector.
+    /// Define the materials used in the detector. This is only used when the
+    /// ConstructDetector method is used.
     void DefineMaterials(void);
 
-    /// Define the natural isotope abundance.
+    /// DEPRECATED: Define the natural isotope abundance. The NIST elements
+    /// should be used for most things.
     G4Element* DefineElement(G4String name, G4String symbol, G4double z);
 
-    /// This really constructs the detector, but doesn't define
-    /// materials before it's constructed.  This is called by Construct()
+    /// This really constructs the detector to build a hard-coded geometry.
+    /// It is mostly used during testing when there isn't a GDML input being
+    /// used.
     G4VPhysicalVolume* ConstructDetector();
 
     /// A messenger to for the DetectorConstruction object.
     EDepSim::DetectorMessenger* fDetectorMessenger;
 
-    /// A constructor to create the world.
+    /// A constructor to create the world.  This is mostly used for testing
+    /// when GDML is not being used.
     EDepSim::Builder* fWorldBuilder;
 
     /// A GDML Parser if one has been defined.
@@ -84,14 +109,16 @@ protected:
 
 private:
 
-    /// The default material.
-    G4Material* fDefaultMaterial;
-
     /// Apply Validation
     bool fValidateGeometry;
 
     /// Vector of logical volumes to exclude being sensitive detectors.
     std::vector<std::string> fExcludeAsSensitiveDetector;
+
+    /// Vector of update actions that need to be called.
+    mutable
+    std::vector<EDepSim::UserDetectorConstruction::UserUpdateGeometryAction*>
+    fExternalActions;
 };
 
 #endif

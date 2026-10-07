@@ -201,7 +201,7 @@ G4LogicalVolume *CaptCryostatBuilder::GetPiece(void) {
                            coneMax.data()),
             FindMaterial("Air"),
             GetName());
-    logVolume->SetVisAttributes(G4VisAttributes::Invisible);
+    logVolume->SetVisAttributes(G4VisAttributes::GetInvisible());
 
 #define BUILD_OUTER_VESSEL
 #ifdef BUILD_OUTER_VESSEL
@@ -350,7 +350,9 @@ G4LogicalVolume *CaptCryostatBuilder::GetPiece(void) {
     }
 #endif
 
+#define BUILD_ULLAGE
 #ifdef BUILD_ULLAGE
+#warning The ullage creates geometry overlaps, run with "-C"
     ////////////////////////////////////////////////////////
     // Define the ullage volume.
     ////////////////////////////////////////////////////////

@@ -2,6 +2,8 @@
 #include "EDepSimPhysicsListMessenger.hh"
 #include "EDepSimException.hh"
 #include "EDepSimExtraPhysics.hh"
+#include "EDepSimDokeBirksSaturation.hh"
+#include "EDepSimGetExternalActionConstructor.hh"
 
 #include <EDepSimLog.hh>
 
@@ -21,43 +23,55 @@
 
 #include <G4ProcessTable.hh>
 
+#include <G4UnitsTable.hh>
 #include <G4SystemOfUnits.hh>
 
 #include <unistd.h>
 
-EDepSim::PhysicsList::PhysicsList(G4String physName) 
+EDepSim::PhysicsList::PhysicsList(G4String physName)
     : G4VModularPhysicsList() {
     G4LossTableManager::Instance();
-    defaultCutValue  = 1.*mm;
+    defaultCutValue  = 0.5*mm;
     fCutForGamma     = defaultCutValue;
     fCutForElectron  = defaultCutValue;
     fCutForPositron  = defaultCutValue;
-    
+
     fMessenger = new EDepSim::PhysicsListMessenger(this);
 
     SetVerboseLevel(1);
 
     G4PhysListFactory factory;
     G4VModularPhysicsList* phys = NULL;
-    
-    // Check to see if the physics list has been over ridden from the
-    // environment variable PHYSLIST
+
+    // Check to see if the physics list has set the environment variable
+    // PHYSLIST
     char* list = getenv("PHYSLIST");
-    if (list) {
-        phys = factory.ReferencePhysList();
+    if (!phys and list) {
+        std::string listName(list);
+        phys = ExternalPhysicsList(listName);
+        if (!phys) {
+            EDepSimLog("Set the physics list from the PHYSLIST environment: "
+                       << list);
+            phys = factory.ReferencePhysList();
+        }
     }
-    
+
     // Check if a list name was provided on the command line.  It usually is
     // not provided.
-    if (!phys && physName.size() > 1
-        && factory.IsReferencePhysList(physName)) {
-        EDepSimLog("Set the default physics list");
+    if (!phys && physName.size() > 1) {
+        EDepSimLog("Set the physics list from the command line: " << physName);
+        if (!factory.IsReferencePhysList(physName)) {
+            EDepSimError("Not a supported physics list");
+            EDepSimThrow("Unsupported physics list");
+        }
         phys =factory.GetReferencePhysList(physName);
     }
 
     // Use the default physics list.
     if (!phys) {
-        phys =factory.GetReferencePhysList("QGSP_BERT");
+        physName = "QGSP_BERT";
+        EDepSimLog("Use the default physics list: " << physName);
+        phys =factory.GetReferencePhysList(physName);
     }
 
     if (!phys) {
@@ -73,10 +87,31 @@ EDepSim::PhysicsList::PhysicsList(G4String physName)
         RegisterPhysics(elem);
     }
 
+    // Add the optical physics so photons can be created.
+    RegisterPhysics(new G4OpticalPhysics());
+
+    // Add an external extra physics list
+    char* extra = getenv("EXTRAPHYSICS");
+    if (extra) {
+        std::string extraPhysicsName(extra);
+        RegisterPhysics(ExternalExtraPhysics(extraPhysicsName));
+    }
+
     // Add our specific lists.
     fExtra = new EDepSim::ExtraPhysics();
     RegisterPhysics(fExtra);
-    RegisterPhysics(new G4OpticalPhysics());
+
+    // Setup the parameters (override if necesssary). The EmSaturation
+    // needs to be set after the materials are defined, so it is not
+    // done here.
+    G4EmParameters* emParams = G4EmParameters::Instance();
+    // emParams->SetEmSaturation(new EDepSim::DokeBirksSaturation(0));
+
+    // Force any necessary optical parameters.
+    G4OpticalParameters* opParams = G4OpticalParameters::Instance();
+
+    // Control with the macro file, not here!
+    // opParams->SetBoundaryInvokeSD(true);
 
 }
 
@@ -119,3 +154,62 @@ void EDepSim::PhysicsList::SetIonizationModel(bool b) {
     fExtra->SetIonizationModel(b);
 }
 
+G4VModularPhysicsList*
+EDepSim::PhysicsList::ExternalPhysicsList(std::string externName) {
+    // Strip the EXTERN:
+    std::size_t pos = externName.find("EXTERN:");
+    if (pos == std::string::npos) return nullptr;
+
+    EDepSimLog("EXTERN NAME " << externName);
+
+    pos = externName.find(":");
+    std::string prefix = externName.substr(0,pos);
+    externName.erase(0,pos+1);
+
+    pos = externName.find(":");
+    std::string library = externName.substr(0,pos);
+    externName.erase(0,pos+1);
+
+    pos = externName.find(":");
+    std::string symbol = externName.substr(0,pos);
+
+    EDepSimLog("Use external physics list: "
+               << "G4VModularPhysicsList* "
+               << library << "::" << symbol << "(char*)");
+
+    G4VModularPhysicsList* phys
+        = EDepSim::CallExternalConstructor<G4VModularPhysicsList>(
+            library, symbol, "EDepSim");
+
+    if (!phys) EDepSimThrow("Library not opened");
+
+    return phys;
+}
+
+G4VPhysicsConstructor*
+EDepSim::PhysicsList::ExternalExtraPhysics(std::string externName) {
+    // Strip the prefix:
+
+    std::size_t pos = externName.find(":");
+    std::string prefix = externName.substr(0,pos);
+    externName.erase(0,pos+1);
+
+    pos = externName.find(":");
+    std::string library = externName.substr(0,pos);
+    externName.erase(0,pos+1);
+
+    pos = externName.find(":");
+    std::string symbol = externName.substr(0,pos);
+
+    EDepSimLog("Use external extra physics list: "
+               << "G4VPhysicsConstructor* "
+               << library << "::" << symbol << "(char*)");
+
+    G4VPhysicsConstructor* phys
+        = EDepSim::CallExternalConstructor<G4VPhysicsConstructor>(
+            library, symbol, "EDepSim");
+
+    if (!phys) EDepSimThrow("Library not opened");
+
+    return phys;
+}

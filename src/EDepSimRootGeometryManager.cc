@@ -23,7 +23,11 @@
 #include <TGeoXtru.h>
 #include <TGeoPcon.h>
 #include <TGeoEltu.h>
-
+#include <TGeoParaboloid.h>
+#include <TGeoHype.h>
+#include <TGeoCone.h>
+#include <TGeoPara.h>
+#include <TGeoTorus.h>
 #include <TColor.h>
 
 #include <globals.hh>
@@ -40,6 +44,7 @@
 #include <G4Box.hh>
 #include <G4Trd.hh>
 #include <G4Tubs.hh>
+#include <G4CutTubs.hh>
 #include <G4Sphere.hh>
 #include <G4Polyhedra.hh>
 #include <G4Polycone.hh>
@@ -49,6 +54,12 @@
 #include <G4IntersectionSolid.hh>
 #include <G4ExtrudedSolid.hh>
 #include <G4EllipticalTube.hh>
+#include <G4Torus.hh>
+#include <G4Para.hh>
+#include <G4Cons.hh>
+#include <G4Hype.hh>
+#include <G4Paraboloid.hh>
+#include <G4GenericTrap.hh>
 
 #include <G4SystemOfUnits.hh>
 #include <G4PhysicalConstants.hh>
@@ -249,6 +260,23 @@ TGeoShape* EDepSim::RootGeometryManager::CreateShape(
                                    zhalf,
                                    minPhiDeg, maxPhiDeg);
     }
+    else if (geometryType == "G4CutTubs") {
+        const G4CutTubs* tube = dynamic_cast<const G4CutTubs*>(theSolid);
+        // Root takes the angles in degrees so there is no extra
+        // conversion.  The cut-plane normals are unit vectors.
+        double zhalf = tube->GetZHalfLength()/CLHEP::mm;
+        double rmin = tube->GetInnerRadius()/CLHEP::mm;
+        double rmax = tube->GetOuterRadius()/CLHEP::mm;
+        double minPhiDeg = tube->GetStartPhiAngle()/CLHEP::degree;
+        double maxPhiDeg = minPhiDeg + tube->GetDeltaPhiAngle()/CLHEP::degree;
+        G4ThreeVector lowNorm = tube->GetLowNorm();
+        G4ThreeVector highNorm = tube->GetHighNorm();
+        theShape = new TGeoCtub(rmin, rmax,
+                                zhalf,
+                                minPhiDeg, maxPhiDeg,
+                                lowNorm.x(), lowNorm.y(), lowNorm.z(),
+                                highNorm.x(), highNorm.y(), highNorm.z());
+    }
     else if (geometryType == "G4Sphere") {
         const G4Sphere* sphere = dynamic_cast<const G4Sphere*>(theSolid);
         // Root takes the angles in degrees so there is no extra
@@ -262,6 +290,57 @@ TGeoShape* EDepSim::RootGeometryManager::CreateShape(
                                   sphere->GetOuterRadius()/CLHEP::mm,
                                   minThetaDeg, maxThetaDeg,
                                   minPhiDeg, maxPhiDeg);
+    }
+    else if (geometryType == "G4Hype") {
+        const G4Hype* Hype = dynamic_cast<const G4Hype*>(theSolid);
+        double rin = Hype->GetInnerRadius()/CLHEP::mm;
+        double stin = Hype->GetInnerStereo()/CLHEP::degree;
+        double rout = Hype->GetOuterRadius()/CLHEP::mm;
+        double stout = Hype->GetOuterStereo()/CLHEP::degree;
+        double dz = Hype->GetZHalfLength()/CLHEP::mm;
+        theShape = new TGeoHype(rin,stin,rout,stout,dz);
+    }
+    else if (geometryType == "G4Paraboloid") {
+        const G4Paraboloid *Paraboloid = dynamic_cast<const G4Paraboloid *>(theSolid);
+
+        double rlo=Paraboloid->GetRadiusMinusZ()/CLHEP::mm;
+        double rhi=Paraboloid->GetRadiusPlusZ()/CLHEP::mm;
+        double dz=Paraboloid->GetZHalfLength()/CLHEP::mm;
+
+        theShape = new TGeoParaboloid(rlo,rhi,dz);
+    }
+    else if (geometryType == "G4Cons") {
+        const G4Cons* Cons = dynamic_cast<const G4Cons*>(theSolid);
+        double rmin1 = Cons->GetInnerRadiusMinusZ()/ CLHEP::mm;
+        double rmax1 = Cons->GetOuterRadiusMinusZ() / CLHEP::mm;
+        double rmin2 = Cons->GetInnerRadiusPlusZ()/CLHEP::mm;
+        double rmax2 = Cons->GetOuterRadiusPlusZ ()/CLHEP::mm;
+        double dz = Cons->GetZHalfLength()/ CLHEP::mm;
+        double phi1 = Cons->GetStartPhiAngle()/ CLHEP::degree;
+        double phi2 = Cons->GetDeltaPhiAngle()/ CLHEP::degree;
+        theShape = new TGeoConeSeg(dz, rmin1, rmax1, rmin2, rmax2, phi1, phi2);
+    }
+    else if (geometryType == "G4Torus") {
+      const G4Torus* torus = dynamic_cast<const G4Torus*>(theSolid);
+      // Root takes the angles in degrees so there is no extra
+      // conversion.
+      double minR = torus->GetRmin()/CLHEP::mm;
+      double maxR = torus->GetRmax()/CLHEP::mm;
+      double axialR = torus->GetRtor()/CLHEP::mm;
+      double phi1 = torus->GetSPhi()/CLHEP::degree;
+      double dphi = torus->GetDPhi()/CLHEP::degree;
+      theShape = new TGeoTorus(axialR, minR, maxR, phi1, dphi);
+    }
+    else if (geometryType == "G4Para") {
+        const G4Para* para = dynamic_cast<const G4Para*>(theSolid);
+        double dX = para->GetXHalfLength() / CLHEP::mm;
+        double dY = para->GetYHalfLength() / CLHEP::mm;
+        double dZ = para->GetZHalfLength() / CLHEP::mm;
+        double alpha =std::atan(para->GetTanAlpha())/CLHEP::degree;
+        G4ThreeVector SymAxis =para->GetSymAxis();
+        double theta = std::acos(SymAxis.z())/CLHEP::degree;
+        double phi = std::acos(SymAxis.x()/std::sin(theta))/CLHEP::degree;
+        theShape = new TGeoPara(dX, dY, dZ, alpha, theta, phi);
     }
     else if (geometryType == "G4Polyhedra") {
         const G4Polyhedra* polyhedra
@@ -352,6 +431,18 @@ TGeoShape* EDepSim::RootGeometryManager::CreateShape(
         double dy1 = trd->GetYHalfLength1()/CLHEP::mm;
         double dy2 = trd->GetYHalfLength2()/CLHEP::mm;
         theShape = new TGeoTrd2(dx1,dx2,dy1,dy2,dz);
+    }
+    else if (geometryType == "G4GenericTrap") {
+        const G4GenericTrap* trap
+            = dynamic_cast<const G4GenericTrap*>(theSolid);
+        double dz = trap->GetZHalfLength()/CLHEP::mm;
+        double vertices[2*8] = { }; // initialized to zeroes
+        for (int i = 0; i < trap->GetNofVertices(); ++i) {
+            const G4TwoVector& v = trap->GetVertex(i);
+            vertices[2*i] = v.x()/CLHEP::mm;
+            vertices[2*i + 1] = v.y()/CLHEP::mm;
+        }
+        theShape = new TGeoArb8(dz, vertices);
     }
     else if (geometryType == "G4SubtractionSolid") {
         const G4SubtractionSolid* sub
@@ -717,10 +808,6 @@ bool EDepSim::RootGeometryManager::CreateEnvelope(
         else {
             int i = 100.0*(1.0-opacity);
             if (i>100) i = 100;
-            EDepSimInfo("Set color of " << theShortName
-                       << " to " << color
-                       << " " << opacity
-                       << " " << i);
             theVolume->SetLineColor(color);
             theVolume->SetTransparency(i);
             theVolume->SetVisibility(true);

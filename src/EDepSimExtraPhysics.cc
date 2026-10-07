@@ -7,7 +7,7 @@
 #include "NESTVersion098/G4ThermalElectron.hh"
 #endif
 
-#include "EDepSimDokeBirks.hh"
+#include "EDepSimSecondaryEnergy.hh"
 #include "EDepSimLog.hh"
 
 #include <globals.hh>
@@ -76,11 +76,13 @@ void EDepSim::ExtraPhysics::ConstructProcess() {
             break;
         }
         case 1: default: {
-            // Add EDepSim::DokeBirks to any applicable particle.
-            EDepSim::DokeBirks* scintProcess = new EDepSim::DokeBirks();
-            if (scintProcess->IsApplicable(*particle)) {
-                pman->AddProcess(scintProcess,ordDefault,
-                                 ordInActive,ordDefault);
+            // Add EDepSim::SecondaryEnergy to any applicable particle.
+            EDepSim::SecondaryEnergy* secondaryProcess
+                = new EDepSim::SecondaryEnergy();
+            if (secondaryProcess->IsApplicable(*particle)) {
+                pman->AddProcess(secondaryProcess);
+                pman->SetProcessOrdering(secondaryProcess,idxAtRest,ordLast);
+                pman->SetProcessOrdering(secondaryProcess,idxPostStep,ordLast);
             }
             break;
         }

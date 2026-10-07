@@ -35,10 +35,14 @@ private:
     G4UIcmdWithADoubleAndUnit* fNeutronThresholdCMD;
     G4UIcmdWithADoubleAndUnit* fLengthThresholdCMD;
     G4UIcmdWithABool*          fSaveAllPrimaryTrajectoriesCMD;
+    G4UIcmdWithADoubleAndUnit* fSaveAllTrajectoriesCMD;
     G4UIcmdWithADoubleAndUnit* fTrajectoryPointAccuracyCMD;
     G4UIcmdWithADoubleAndUnit* fTrajectoryPointDepositCMD;
     G4UIcmdWithAString*        fTrajectoryBoundaryCMD;
     G4UIcmdWithoutParameter*   fClearBoundariesCMD;
+    G4UIcommand*               fTrajectoryRuleCMD;
+    G4UIcmdWithoutParameter*   fClearTrajectoryRulesCMD;
+    G4UIcmdWithABool*          fSavePhotonTrajectoriesCMD;
 
 };
 #endif

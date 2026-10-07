@@ -11,9 +11,9 @@ class G4UIcmdWithAnInteger;
 class G4UIcmdWithADoubleAndUnit;
 class G4UIcmdWithoutParameter;
 
+namespace EDepSim {class DetectorMessenger;}
 /// Handle the command line interface to change the geometry and other
 /// parameters associated with the EDepSim::m detector.
-namespace EDepSim {class DetectorMessenger;}
 class EDepSim::DetectorMessenger: public G4UImessenger {
 public:
     DetectorMessenger(EDepSim::UserDetectorConstruction*);
@@ -41,6 +41,13 @@ private:
 
     G4UIdirectory*             fMaterialDir;
     G4UIcommand*               fMaterialBirksCmd;
+
+    G4UIdirectory*             fEDepSimActionsDir;
+    G4UIcommand*               fLoadUpdateGeometryCMD;
+    G4UIcommand*               fLoadRunActionCMD;
+    G4UIcommand*               fLoadEventActionCMD;
+    G4UIcommand*               fLoadTrackActionCMD;
+    G4UIcommand*               fLoadStepActionCMD;
 
 };
 
