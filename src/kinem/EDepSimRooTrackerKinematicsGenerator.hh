@@ -40,7 +40,9 @@ public:
     
     /// Get a map of the particle positions in the event. This is done to
     /// allow multiple primary vertices within a single event for displaced particles.
-    virtual std::map<std::tuple<double, double, double, double>, std::vector<int>> GroupParticlesByPosition();
+    /// Particles are grouped by a {t,x,y,z} VertexKey
+    using VertexKey = std::array<std::int64_t, 4>; 
+    virtual std::map<VertexKey, std::vector<int>> GroupParticlesByPosition();
 
     /// Add primary vertices to the event.  
     virtual GeneratorStatus GeneratePrimaryVertex(

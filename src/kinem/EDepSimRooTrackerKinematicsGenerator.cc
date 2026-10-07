@@ -186,31 +186,28 @@ G4String EDepSim::RooTrackerKinematicsGenerator::GetInputName() {
     return G4String(fInput->GetName());
 }
 
+std::map<EDepSim::RooTrackerKinematicsGenerator::VertexKey, std::vector<int>> EDepSim::RooTrackerKinematicsGenerator::GroupParticlesByPosition() {
+    
+    constexpr double kPrecision = 1e-6;
+    //quantise the coordinates to a kPrecision-wide grid
+    auto quantize = [](double value){ 
+        // round the ratio to the nearest integer
+        return static_cast<std::int64_t>(std::llround(value / kPrecision));};
 
-std::map<std::tuple<double, double, double, double>, std::vector<int>> EDepSim::RooTrackerKinematicsGenerator::GroupParticlesByPosition() {
-    // create a container for to group the particles in
-    std::map<std::tuple<double, double, double, double>, std::vector<int>> positionToParticles;
+    // create a container to group the particles in
+    std::map<VertexKey, std::vector<int>> positionToParticles;
 
-    //round the coordinates to a certain precision to avoid floating point issues
-    auto roundTo = [](double value, double precision){ 
-        return std::round(value / precision) * precision; };
-    const double precision = 1e-6;
-
-    // group the particles by their (x,y,z,t) position
+    // group the particles by their (t,x,y,z) position
     for (int cnt = 0; cnt < fStdHepN; ++cnt)
     {
         // keep only the final state particles
         if(fStdHepStatus[cnt] != 1)
             continue;
-        // extract the coordinates
-        double x = roundTo(fStdHepX4[cnt][0], precision);
-        double y = roundTo(fStdHepX4[cnt][1], precision);
-        double z = roundTo(fStdHepX4[cnt][2], precision);
-        double t = roundTo(fStdHepX4[cnt][3], precision);
-        // create a key from the coordinate combination
-        auto key = std::make_tuple(t, x, y, z);
-        // add the particle index under its corresponding vertex position
-        positionToParticles[key].push_back(cnt);
+        // extract the coordinate array
+        const double* x4 = fStdHepX4[cnt];
+        // build the array as {t,x,y,z} so that the vertices are time-ordered
+        positionToParticles[{quantize(x4[3]), quantize(x4[1]),
+                            quantize(x4[2]), quantize(x4[3])}].push_back(cnt);
     }
     return positionToParticles;
 }
@@ -355,7 +352,6 @@ EDepSim::RooTrackerKinematicsGenerator::GeneratePrimaryVertex(
     auto groupedPositions = EDepSim::RooTrackerKinematicsGenerator::GroupParticlesByPosition();
     // loop over the final state particles in each vertex group
     for (const auto& particleGroup : groupedPositions){
-        std::cout << "Vtx at (" << std::get<1>(particleGroup.first)<< ", "<<std::get<2>(particleGroup.first)<< ", " << std::get<2>(particleGroup.first) << ", " << std::get<0>(particleGroup.first) << ")\n";
         // get the vertex group indices
         const auto &vtxIndices = particleGroup.second;
         const int firstPartIdx = vtxIndices.front();
@@ -460,7 +456,6 @@ EDepSim::RooTrackerKinematicsGenerator::GeneratePrimaryVertex(
                 << " " << momentum.e()/MeV << " MeV"
                 << " " << momentum.m()/MeV << " MeV/c^2");
             theVertex->SetPrimary(theParticle);
-            std::cout << "idx: " << cnt << ", pdg: " << theParticle->GetPDGcode() << ", tuple: (" << std::get<0>(particleGroup.first)<<", "<<std::get<1>(particleGroup.first)<<", "<<std::get<2>(particleGroup.first)<<", "<<std::get<3>(particleGroup.first)<< ")\n";
         }
     }
 
