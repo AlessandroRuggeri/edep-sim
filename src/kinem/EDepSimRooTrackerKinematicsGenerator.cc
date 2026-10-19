@@ -258,8 +258,9 @@ EDepSim::RooTrackerKinematicsGenerator::GeneratePrimaryVertex(
         return kEndEvent;
     }
 
-    // Template VertexInfo holding the global interaction metadata; 
-    // it is copied into each displaced vertex’s own VertexInfo.
+    // VertexInfo holding the global interaction metadata and the informational
+    // vertices. It is attached to the first primary vertex; the other primary
+    // vertices get their own VertexInfo with a copy of the scalar fields only.
     EDepSim::VertexInfo *vertexInfo = new EDepSim::VertexInfo;
     // Fill the information fields for this vertex.
     vertexInfo->SetReaction(eventCode);
@@ -293,6 +294,7 @@ EDepSim::RooTrackerKinematicsGenerator::GeneratePrimaryVertex(
 
     G4ParticleTable* particleTable = G4ParticleTable::GetParticleTable();
 
+    // save the incident neutrino and target (status==0 particles)
     for(int cnt = 0; cnt <fStdHepN; ++cnt){
         if(fStdHepStatus[cnt] != 0)
             continue;
@@ -312,6 +314,13 @@ EDepSim::RooTrackerKinematicsGenerator::GeneratePrimaryVertex(
                 continue;
             }
         }
+
+        if (!particleDef) {
+            EDepSimSevere(" Particle code " << fStdHepPdg[cnt]
+                    << " not recognized (not tracking)");
+            continue;
+        }
+
         // Determine a name for the particle.
         std::string particleName =
             particleDef ? particleDef->GetParticleName(): "unknown";
@@ -383,16 +392,7 @@ EDepSim::RooTrackerKinematicsGenerator::GeneratePrimaryVertex(
         // Add the information field to the vertex.
         theVertex->SetUserInformation(thisVertexInfo);
 
-        // auto vtx_pos = theVertex->GetPosition();
-        // auto* nav = G4TransportationManager::GetTransportationManager()->GetNavigatorForTracking();
-        // auto* vtx_volume = nav->LocateGlobalPointAndSetup(vtx_pos);
-        // std::cout << "[Vertex] relative Position: " << (vtx_pos-in_vtx_pos)/fermi << " in volume: " << (vtx_volume ? vtx_volume->GetName() : "null")<<"\n";
-
-
-        // Fill the particles to be tracked (status ==1) in the vertex group.  These particles are
-        // attached to the primary vertex.  Also save the incident neutrino
-        // particle and the incident target nucleus; these particles are attached
-        // to informational vertex.
+        // Fill the particles to be tracked (status ==1) in the vertex group.  
         for (const auto& cnt : vtxIndices) {
             G4ParticleDefinition* particleDef
                 = particleTable->FindParticle(fStdHepPdg[cnt]);
@@ -421,19 +421,14 @@ EDepSim::RooTrackerKinematicsGenerator::GeneratePrimaryVertex(
                                     fStdHepP4[cnt][2]*GeV,
                                     fStdHepP4[cnt][3]*GeV);
 
-            if (fStdHepStatus[cnt] != 1) {
-                EDepSimVerbose("Untracked particle: " << cnt
-                            << " " << particleName
-                            << " with " << momentum.e()/MeV
-                            << " MeV "
-                            << " w/ mothers " << fStdHepFm[cnt]
-                            << " to " << fStdHepLm[cnt]);
-            }
-
-            // We are only interested in particles to be tracked (status==1)
-            if(fStdHepStatus[cnt] != 1) {
-                continue;
-            }
+            // if (fStdHepStatus[cnt] != 1) {
+            //     EDepSimVerbose("Untracked particle: " << cnt
+            //                 << " " << particleName
+            //                 << " with " << momentum.e()/MeV
+            //                 << " MeV "
+            //                 << " w/ mothers " << fStdHepFm[cnt]
+            //                 << " to " << fStdHepLm[cnt]);
+            // }
 
             if (!particleDef) {
                 EDepSimSevere(" Particle code " << fStdHepPdg[cnt]
