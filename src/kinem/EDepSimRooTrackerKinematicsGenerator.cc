@@ -206,8 +206,8 @@ std::map<EDepSim::RooTrackerKinematicsGenerator::VertexKey, std::vector<int>> ED
         // extract the coordinate array
         const double* x4 = fStdHepX4[cnt];
         // build the array as {t,x,y,z} so that the vertices are time-ordered
-        positionToParticles[{quantize(x4[3]), quantize(x4[1]),
-                            quantize(x4[2]), quantize(x4[3])}].push_back(cnt);
+        positionToParticles[{quantize(x4[3]), quantize(x4[0]),
+                            quantize(x4[1]), quantize(x4[2])}].push_back(cnt);
     }
     return positionToParticles;
 }
@@ -260,8 +260,8 @@ EDepSim::RooTrackerKinematicsGenerator::GeneratePrimaryVertex(
         return kEndEvent;
     }
 
-    // All vertices (informational, neutrino-vtx. and displaced) share the same VertexInfo instance
-    // which stores the global neutrino-interaction metadata (just for consistency, for the moment)
+    // Template VertexInfo holding the global interaction metadata; 
+    // it is copied into each displaced vertex’s own VertexInfo.
     EDepSim::VertexInfo *vertexInfo = new EDepSim::VertexInfo;
     // Fill the information fields for this vertex.
     vertexInfo->SetReaction(eventCode);
@@ -280,7 +280,7 @@ EDepSim::RooTrackerKinematicsGenerator::GeneratePrimaryVertex(
 
     // Add an informational vertex for storing the incoming
     // neutrino particle and target nucleus.
-    // 7/06/2025 - fill the informational vertex outside the loop
+    // Fill the informational vertex outside the loop
     G4PrimaryVertex* theIncomingVertex
         = new G4PrimaryVertex(G4ThreeVector(fEvtVtx[0]*m,
                                             fEvtVtx[1]*m,
@@ -367,7 +367,7 @@ EDepSim::RooTrackerKinematicsGenerator::GeneratePrimaryVertex(
         thisVertexInfo->SetProbability(vertexInfo->GetProbability());
 
         // fill in the vtx. position from the first element in the group
-        // fStdHepX4 is assumed to be in [fermi, fermi, fermi, zs], so we convert
+        // fStdHepX4 is assumed to be in [fermi, fermi, fermi, ys], so we convert
         G4PrimaryVertex *theVertex = new G4PrimaryVertex(G4ThreeVector(fEvtVtx[0] * m + fStdHepX4[firstPartIdx][0] * fermi,
                                                                        fEvtVtx[1] * m + fStdHepX4[firstPartIdx][1] * fermi,
                                                                        fEvtVtx[2] * m + fStdHepX4[firstPartIdx][2] * fermi),
