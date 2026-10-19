@@ -18,8 +18,6 @@
 #include <G4UnitsTable.hh>
 #include <Randomize.hh>
 
-#include "G4TransportationManager.hh"
-
 #include <TFile.h>
 #include <TBits.h>
 #include <TObjString.h>
@@ -343,28 +341,32 @@ EDepSim::RooTrackerKinematicsGenerator::GeneratePrimaryVertex(
         theIncomingVertex->SetPrimary(theParticle);
     }
 
-    // auto in_vtx_pos = theIncomingVertex->GetPosition();
-    // auto* in_nav = G4TransportationManager::GetTransportationManager()->GetNavigatorForTracking();
-    // auto* in_vtx_volume = in_nav->LocateGlobalPointAndSetup(in_vtx_pos);
-    // std::cout << "[Incoming Vertex] Position: " << in_vtx_pos/fermi << " in volume: " << (in_vtx_volume ? in_vtx_volume->GetName() : "null")<<"\n";
-
-    // 6/06/2025 - adding multiple vertices by looping over the map
+    // Add multiple vertices by looping over the map
     auto groupedPositions = EDepSim::RooTrackerKinematicsGenerator::GroupParticlesByPosition();
+    // flag for managing the assignment of vertexInfo
+    bool firstVertex = true;
     // loop over the final state particles in each vertex group
     for (const auto& particleGroup : groupedPositions){
         // get the vertex group indices
         const auto &vtxIndices = particleGroup.second;
         const int firstPartIdx = vtxIndices.front();
 
-        // manual deep copy of vertexInfo for the loop
-        auto* thisVertexInfo = new EDepSim::VertexInfo;
-        thisVertexInfo->SetReaction(vertexInfo->GetReaction());
-        thisVertexInfo->SetFilename(vertexInfo->GetFilename());
-        thisVertexInfo->SetInteractionNumber(vertexInfo->GetInteractionNumber());
-        thisVertexInfo->SetCrossSection(vertexInfo->GetCrossSection());
-        thisVertexInfo->SetDiffCrossSection(vertexInfo->GetDiffCrossSection());
-        thisVertexInfo->SetWeight(vertexInfo->GetWeight());
-        thisVertexInfo->SetProbability(vertexInfo->GetProbability());
+        // first vertex adopts vertexInfo; the others get a copy of the scalar fields only
+        EDepSim::VertexInfo* thisVertexInfo = nullptr;
+        if (firstVertex) {
+            // adopt the original vertexInfo in the first G4PrimaryVertex
+            thisVertexInfo = vertexInfo;
+            firstVertex = false;
+        } else {
+            thisVertexInfo = new EDepSim::VertexInfo;
+            thisVertexInfo->SetReaction(vertexInfo->GetReaction());
+            thisVertexInfo->SetFilename(vertexInfo->GetFilename());
+            thisVertexInfo->SetInteractionNumber(vertexInfo->GetInteractionNumber());
+            thisVertexInfo->SetCrossSection(vertexInfo->GetCrossSection());
+            thisVertexInfo->SetDiffCrossSection(vertexInfo->GetDiffCrossSection());
+            thisVertexInfo->SetWeight(vertexInfo->GetWeight());
+            thisVertexInfo->SetProbability(vertexInfo->GetProbability());
+        }
 
         // fill in the vtx. position from the first element in the group
         // fStdHepX4 is assumed to be in [fermi, fermi, fermi, ys], so we convert
@@ -508,5 +510,6 @@ EDepSim::RooTrackerKinematicsGenerator::GeneratePrimaryVertex(
     theProductionVertex->SetPrimary(theProductionParticle);
 #endif
 
+    if (firstVertex) delete vertexInfo; // no vertex was created before the final return
     return generatorStatus;
 }
