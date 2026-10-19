@@ -232,7 +232,7 @@ EDepSim::RooTrackerKinematicsGenerator::GeneratePrimaryVertex(
     int entry = fEntryVector.at(fNextEntry);
     // Get current entry to be used as new vertex - see comment below.
     fTree->GetEntry(entry);
-    // Store current entry in the pass-through obj. N.B. To avoid mismatch
+    // Store current entry in the pass-through obj. To avoid mismatch
     // and false results call EDepSim::KinemPassThrough::AddEntry(fTreePtr, X)
     // where X is same as X in most recent call to fTreePtr->GetEntry(X).
     EDepSim::KinemPassThrough::GetInstance()->AddEntry(fTree, entry);
@@ -261,7 +261,7 @@ EDepSim::RooTrackerKinematicsGenerator::GeneratePrimaryVertex(
     }
 
     // All vertices (informational, neutrino-vtx. and displaced) share the same VertexInfo instance
-    // which stores the global neutrino-interaction metadata (just for consistency, for the moment)
+    // which stores the global neutrino-interaction metadata
     EDepSim::VertexInfo *vertexInfo = new EDepSim::VertexInfo;
     // Fill the information fields for this vertex.
     vertexInfo->SetReaction(eventCode);
@@ -343,12 +343,7 @@ EDepSim::RooTrackerKinematicsGenerator::GeneratePrimaryVertex(
         theIncomingVertex->SetPrimary(theParticle);
     }
 
-    // auto in_vtx_pos = theIncomingVertex->GetPosition();
-    // auto* in_nav = G4TransportationManager::GetTransportationManager()->GetNavigatorForTracking();
-    // auto* in_vtx_volume = in_nav->LocateGlobalPointAndSetup(in_vtx_pos);
-    // std::cout << "[Incoming Vertex] Position: " << in_vtx_pos/fermi << " in volume: " << (in_vtx_volume ? in_vtx_volume->GetName() : "null")<<"\n";
-
-    // 6/06/2025 - adding multiple vertices by looping over the map
+    // Add multiple vertices by looping over the map
     auto groupedPositions = EDepSim::RooTrackerKinematicsGenerator::GroupParticlesByPosition();
     // loop over the final state particles in each vertex group
     for (const auto& particleGroup : groupedPositions){
@@ -380,11 +375,6 @@ EDepSim::RooTrackerKinematicsGenerator::GeneratePrimaryVertex(
 
         // Add the information field to the vertex.
         theVertex->SetUserInformation(thisVertexInfo);
-
-        // auto vtx_pos = theVertex->GetPosition();
-        // auto* nav = G4TransportationManager::GetTransportationManager()->GetNavigatorForTracking();
-        // auto* vtx_volume = nav->LocateGlobalPointAndSetup(vtx_pos);
-        // std::cout << "[Vertex] relative Position: " << (vtx_pos-in_vtx_pos)/fermi << " in volume: " << (vtx_volume ? vtx_volume->GetName() : "null")<<"\n";
 
 
         // Fill the particles to be tracked (status ==1) in the vertex group.  These particles are
