@@ -187,10 +187,10 @@ G4String EDepSim::RooTrackerKinematicsGenerator::GetInputName() {
 std::map<EDepSim::RooTrackerKinematicsGenerator::VertexKey, std::vector<int>> EDepSim::RooTrackerKinematicsGenerator::GroupParticlesByPosition() {
     
     constexpr double kPrecision = 1e-6;
-    //quantise the coordinates to a kPrecision-wide grid
-    auto quantize = [](double value){ 
-        // round the ratio to the nearest integer
-        return static_cast<std::int64_t>(std::llround(value / kPrecision));};
+    // round the coordinates to a certain precision to avoid floating point issues
+    auto roundTo = [](double value, double precision){
+        return std::round(value / kPrecision) * kPrecision;
+    };
 
     // create a container to group the particles in
     std::map<VertexKey, std::vector<int>> positionToParticles;
@@ -204,8 +204,10 @@ std::map<EDepSim::RooTrackerKinematicsGenerator::VertexKey, std::vector<int>> ED
         // extract the coordinate array
         const double* x4 = fStdHepX4[cnt];
         // build the array as {t,x,y,z} so that the vertices are time-ordered
-        positionToParticles[{quantize(x4[3]), quantize(x4[0]),
-                            quantize(x4[1]), quantize(x4[2])}].push_back(cnt);
+        positionToParticles[{roundTo(x4[3], kPrecision),
+                             roundTo(x4[0], kPrecision),
+                             roundTo(x4[1], kPrecision),
+                             roundTo(x4[2], kPrecision)}].push_back(cnt);
     }
     return positionToParticles;
 }
@@ -457,8 +459,7 @@ EDepSim::RooTrackerKinematicsGenerator::GeneratePrimaryVertex(
     }
 
 #ifdef PARENT_PARTICLE_PASS_THROUGH
-    // Fill the particles at the decay vertex.  These are the first info
-    // vertex.
+    // Fill the particles at the decay vertex.
     G4PrimaryVertex* theDecayVertex
         = new G4PrimaryVertex(G4ThreeVector(fNuParentDecX4[0]*m,
                                             fNuParentDecX4[1]*m,
